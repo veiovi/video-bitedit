@@ -2,8 +2,9 @@
 
 /**
  * How well `query` matches `text`, or null when it does not: every query
- * character must appear in order. Matches at word starts and runs of
- * consecutive characters score higher; shorter texts win ties.
+ * character must appear in order. The whole query appearing as one run scores
+ * highest, then matches at word starts and runs of consecutive characters;
+ * shorter texts win ties.
  */
 export function fuzzyScore(query: string, text: string): number | null {
   const q = query.toLowerCase().replace(/\s+/g, '');
@@ -20,5 +21,9 @@ export function fuzzyScore(query: string, text: string): number | null {
     prev = found;
     ti = found + 1;
   }
+  // The query as one run (ignoring spaces) beats letters scattered through the text,
+  // most of all at the start of a word.
+  const at = t.replace(/\s+/g, ' ').indexOf(query.toLowerCase().trim());
+  if (at >= 0) score += 20 + (at === 0 || /[\s:·/(\-]/.test(t[at - 1]) ? 10 : 0);
   return score - t.length * 0.01;
 }

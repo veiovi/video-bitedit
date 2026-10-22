@@ -15,8 +15,10 @@ import {
   deleteSelection,
   detachSelection,
   duplicateSelection,
+  freezeAtPlayhead,
   pasteClipboard,
   seekEdit,
+  setClipSpeed,
   toggleEnabledSelection,
   toggleLoop,
   useEditor,
@@ -68,6 +70,10 @@ const RUN: Record<CommandId, () => void> = {
   deselect: () => state().select([]),
   'toggle-enabled': () => toggleEnabledSelection(),
   'detach-audio': () => detachSelection(),
+  'freeze-frame': () => freezeAtPlayhead(),
+  'speed-half': () => setClipSpeed(useEditor.getState().selection, 0.5),
+  'speed-normal': () => setClipSpeed(useEditor.getState().selection, 1),
+  'speed-double': () => setClipSpeed(useEditor.getState().selection, 2),
   keyframe: () => toggleKeyAtPlayhead(),
   normalize: () => void normalizeClips(state().selection),
   duck: () => {
@@ -99,7 +105,7 @@ const RUN: Record<CommandId, () => void> = {
 };
 
 /** Commands that change the project; hidden for view-only links. */
-const EDITS = new Set<CommandId>(['undo', 'redo', 'split', 'split-all', 'delete', 'ripple-delete', 'lift', 'cut-clips', 'paste', 'duplicate', 'toggle-enabled', 'detach-audio', 'add-marker', 'magnet', 'add-video-track', 'add-audio-track', 'export']);
+const EDITS = new Set<CommandId>(['undo', 'redo', 'split', 'split-all', 'delete', 'ripple-delete', 'lift', 'cut-clips', 'paste', 'duplicate', 'toggle-enabled', 'detach-audio', 'freeze-frame', 'speed-half', 'speed-normal', 'speed-double', 'add-marker', 'magnet', 'add-video-track', 'add-audio-track', 'export']);
 
 interface Item {
   key: string;
