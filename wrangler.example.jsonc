@@ -1,0 +1,22 @@
+// Copy to wrangler.jsonc (or run `npm run setup`) and fill in your own IDs.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "videdit",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/m/*", "/w/*"]
+  },
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "videdit",
+      "database_id": "YOUR_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "videdit-media" }]
+}

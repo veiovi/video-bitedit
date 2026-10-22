@@ -1,0 +1,106 @@
+# Video bitEdit plan
+
+## Goal
+
+Video bitEdit is an open-source, all-in-one tool for producing videos and publishing
+them. You give it (or an agent) a folder of clips. It produces a main video
+and a social short, which you review in a polished timeline editor on your
+machine. One API token is enough to push the project to Cloudflare. Anyone
+with the link can then keep editing it, with all the source clips. When the
+cut is right, **Render & publish** produces a public watch page.
+
+**MVP is done when:**
+
+1. `videdit open <folder>` turns a folder of clips into a project and opens
+   the local editor. An agent can build the main cut and a vertical short
+   with `videdit cut`, or by editing `videdit.json`, and the open editor
+   reloads live.
+2. The editor supports:
+   - moves, trims, splits and ripple delete;
+   - clip and track volume, fades and transforms;
+   - text clips;
+   - up to 10 video and 8 audio tracks;
+   - undo;
+   - five UI skins;
+   - phone-sized layouts.
+3. `videdit deploy` (with an API token) and `videdit push` put the timeline
+   and sources on a `*.workers.dev` URL. The edit link edits, the view link
+   watches and comments, and `videdit pull` brings changes back.
+4. Render (locally, or queued from the cloud page to `videdit worker`) matches
+   the preview. Publish creates a public watch page with link previews.
+
+All four are met. The verification evidence is in the PR.
+
+## Research summary
+
+**Renderers**
+- **Remotion 4**: mature frame-accurate `@remotion/player` for in-browser
+  preview. `@remotion/renderer` uses headless Chrome plus FFmpeg. Free for
+  individuals and companies of up to 3 people.
+- **HyperFrames** (HeyGen, Apache-2.0): its HTML plus data-attribute model is
+  attractive, but it is still 0.x and its player has no documented sync
+  guarantees.
+- **ffmpeg.wasm and Remotion's web renderer**: too limited for final output.
+
+**Cloudflare**
+- Workers cannot run Chrome. Containers (GA April 2026, requires Workers
+  Paid) can, with up to 4 vCPU and a 20 GB disk.
+- A Worker request body is limited to 100 MB, so uploads go to R2 in
+  multipart chunks.
+- D1 holds project rows. Durable Objects are the upgrade path to realtime
+  collaborative editing.
+
+## Decisions
+
+| Concern | Choice | Why |
+|---|---|---|
+| Preview | Remotion Player rendering the timeline JSON | Frame-accurate, multi-track, same composition the renderer uses |
+| Final render | `@remotion/renderer` in-process locally, or `videdit worker` for cloud-queued jobs | Pixel-identical to preview; free for individuals; avoids Containers' disk/CPU caps for MVP |
+| Workflow | Local folder first (`videdit.json` next to the clips), cloud by `push`/`pull` | Agents work on plain files; nothing leaves the machine until shared |
+| Formats | Several timelines per project sharing one media bin | A main 16:9 cut and a 9:16 short from the same footage |
+| Look | Five switchable UI skins (Mono Unix, Bit Edit, Nightshift, Amp Cut, Sand Edit) via CSS variables; responsive layout | One layout, many styles; usable on phones |
+| Media and audio processing | FFmpeg (bundled with Remotion, plus system FFmpeg for later proxies) | Reliable decoding of any codec |
+| Hosting | One Cloudflare Worker serving the SPA and the `/api` routes | One deploy and one URL |
+| Media | R2. The browser uploads 16 MB multipart chunks through the Worker, and the Worker streams playback with Range support | Stays under the request limit; no S3 keys in the browser |
+| Project state | D1 rows holding the timeline JSON, with an optimistic `version` | Simple, durable; other open editors poll for changes |
+| Access | A random project ID is the view link. A secret edit key is kept in the URL fragment. A workspace key is required to create projects and run render workers | Shareable with no accounts, and nobody can create projects anonymously |
+| Timeline model | Integer frames. Tracks listed top to bottom. Clips carry `start`, `duration` and source `in`. Placement uses overwrite semantics | Exact edits; maps cleanly to Remotion `<Sequence>` and to MLT if exported later |
+
+## Architecture
+
+See [architecture.md](architecture.md) for the data model, the shared REST
+API (Cloudflare Worker and local server), storage, access control and the
+render worker protocol.
+
+## Later ideas
+
+- A `motion` clip kind: parameterised canvas grammars (kinetic type, charts)
+  and generic transitions (whip, push, iris).
+- Music ducking under speech.
+
+## Phases
+
+1. **MVP (built).** The local-first editor and CLI, the agent cut list,
+   multiple timelines (main + short), five UI skins, a mobile layout,
+   Cloudflare deploy/push/pull, comments, the render queue and worker, and
+   publishing to watch pages.
+2. **Short-form intelligence.**
+   - Built: local transcription (whisper.cpp or OpenAI Whisper), stored as an
+     asset sidecar and synced to R2.
+   - Built: caption clips with word timings, chunked into 3–4 word lines with
+     a highlight on the spoken word, and generated by cut lists
+     (`captions`).
+   - Built: cut-list cut points snapped to the quietest 10 ms (`snap`).
+   - Next: silence and retake removal, and text-based editing in the editor.
+3. **Proxies and robustness.** FFmpeg 720p proxies for codecs browsers cannot
+   play (ProRes, HEVC). Resumable uploads. Real audio meters.
+4. **Motion and transitions.**
+   - A `motion` clip kind (kinetic type and chart grammars).
+   - Overlap transitions using `@remotion/transitions`.
+   - Keyframes on transform and volume.
+5. **Cloud rendering.** The same render code in a Cloudflare Container,
+   triggered by the queue.
+6. **Realtime collaboration.** A Durable Object per project with WebSockets,
+   presence, and comment threads.
+7. **Interchange and agents.** Export to MLT, OTIO and FCP XML. An MCP server
+   over the edit operations.
