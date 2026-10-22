@@ -30,6 +30,7 @@ import { Preview } from './Preview';
 import { ReplaceDialog } from './ReplaceDialog';
 import { TimelineView } from './TimelineView';
 import { TranscriptPanel } from './TranscriptPanel';
+import { CommandPalette, openPalette } from './CommandPalette';
 import { HelpButton, HelpTip } from './Help';
 
 type MobilePanel = 'media' | 'inspector' | 'transcript' | 'comments' | 'history' | 'export';
@@ -512,6 +513,9 @@ export function EditorPage({ projectId }: { projectId: string }) {
           </span>
           <HelpTip id="save" />
           <span className="mode-tag">{server?.mode === 'local' ? 'Local' : 'Cloud'}</span>
+          <button className="palette-btn" onClick={openPalette} title="Command palette (⌘K)">
+            ⌘K
+          </button>
           <HelpButton />
           <button onClick={() => setSharing(true)}>Share</button>
           {canEdit && (
@@ -571,6 +575,7 @@ export function EditorPage({ projectId }: { projectId: string }) {
 
       {sharing && <ShareDialog onClose={() => setSharing(false)} />}
       <ReplaceDialog />
+      <CommandPalette />
       {toast && <div className="toast">{toast}</div>}
     </div>
   );

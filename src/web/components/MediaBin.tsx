@@ -18,7 +18,7 @@ function fmtDuration(sec: number | null) {
 }
 
 /** Append to the first suitable track at the end of its clips. */
-function appendToTimeline(asset: Asset | null, preset?: TextPreset) {
+export function appendToTimeline(asset: Asset | null, preset?: TextPreset) {
   const state = useEditor.getState();
   const t = activeTimeline(state);
   const kind = asset ? asset.kind : 'text';

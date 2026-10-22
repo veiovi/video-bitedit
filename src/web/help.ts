@@ -267,4 +267,6 @@ export const SHORTCUTS: [string, string][] = [
   ['⌘-scroll / pinch', 'Zoom around the pointer'],
   ['M', 'Add marker (click one to jump, double-click to remove)'],
   ['?', 'Open this help'],
+  ['⌘K', 'Command palette: search and run any command, jump to a marker, add media or open help'],
+  ['⌫ in the transcript', 'Cut the selected words from every unlocked track'],
 ];
