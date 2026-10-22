@@ -48,7 +48,8 @@ preview exactly.
    again. The open editor reloads automatically.
 5. **Deliver.**
    - Local file: `videdit render <folder> --timeline <name>`. Output goes to
-     `<folder>/exports/`.
+     `<folder>/exports/`. `--from <time> --to <time>` renders only part, and
+     `--still <time>` saves one frame as a PNG.
    - Shareable editing link: `videdit push <folder>`. This needs `videdit
      deploy` to have been run once with `CLOUDFLARE_API_TOKEN`.
    - Public watch page: `videdit publish <folder> --timeline <name> --title "…"`.

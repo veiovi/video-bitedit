@@ -217,6 +217,8 @@ overwrite operations keep the words aligned.
 
 ```bash
 videdit render <folder> --timeline Short --preset mp4-1080p   # → <folder>/exports/
+videdit render <folder> --from 12.5 --to 1:05                 # only that part (--to is where it ends)
+videdit render <folder> --still 0:42                          # the frame at 0:42 as a PNG
 videdit push <folder>                                         # edit + view links
 videdit publish <folder> --timeline Main --title "…"          # render locally + public watch page
 ```
