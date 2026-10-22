@@ -1142,7 +1142,7 @@ h3 {
 /* ---------- Timeline ---------- */
 
 .timeline {
-  --header-w: 168px;
+  --header-w: 212px;
 }
 
 .timeline-toolbar {
@@ -2947,4 +2947,184 @@ button.help-more:hover:not(:disabled) {
   .top-actions .help-btn {
     display: none;
   }
+}
+
+/* ---------- Timing edits and track headers ---------- */
+
+/* Frame ticks along the ruler when zoomed in far enough to see single frames. */
+.ruler.frames {
+  background-image: none;
+}
+
+.frame-ticks {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 7px;
+  background-image: linear-gradient(90deg, var(--dim) 0 1px, transparent 1px);
+  background-repeat: repeat-x;
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.badge.speed,
+.badge.freeze {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+/* Each clip carries its track's colour as a stripe on its left edge. */
+.track-lane .clip {
+  border-left: 3px solid var(--tc);
+}
+
+.speed-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  grid-column: 2 / -1;
+}
+
+.speed-presets button {
+  min-width: 40px;
+  padding: 2px 6px;
+}
+
+.track-header {
+  position: relative;
+  touch-action: none;
+}
+
+/* The kind label only shows when the header has room for it beside the name and buttons. */
+.track-header {
+  container-type: inline-size;
+}
+
+.track-header .track-buttons {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+@container (max-width: 260px) {
+  .track-label {
+    display: none;
+  }
+}
+
+.track-header.dragging {
+  opacity: 0.6;
+}
+
+/* The colour swatch is the stripe on the header's left edge. */
+.track-color {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 6px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--tc);
+  cursor: pointer;
+  transition: width 0.1s;
+}
+
+.track-color:hover:not(:disabled),
+.track-color:focus-visible {
+  width: 10px;
+}
+
+.track-badge {
+  /* Names are shortened in the markup, so the badge always shows its whole text. */
+  min-width: max-content;
+  white-space: nowrap;
+  cursor: grab;
+}
+
+.track-header .track-buttons button {
+  padding: 2px;
+}
+
+/* Phones: the narrow header shortens long names further. */
+@media (max-width: 860px) {
+  .track-badge {
+    min-width: 32px;
+    max-width: 44px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+@media (min-width: 861px) {
+  .track-header {
+    column-gap: 5px;
+  }
+}
+
+.track-rename {
+  width: 72px;
+  min-height: 22px !important;
+  padding: 1px 4px !important;
+  font-size: 12px;
+}
+
+.track-drop-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  margin-top: -1px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.track-header.h-small {
+  padding-top: 1px;
+  padding-bottom: 1px;
+}
+
+.track-header.h-small .track-volume,
+.track-header.h-small .track-label {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .track-buttons .track-height {
+    display: none;
+  }
+}
+
+.track-header.h-small .track-buttons button {
+  min-height: 20px;
+  padding: 1px 3px;
+}
+
+.swatch-menu {
+  position: fixed;
+  z-index: 60;
+  display: grid;
+  grid-template-columns: repeat(4, 28px);
+  gap: 6px;
+  padding: 8px;
+  border: var(--border-w) solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+.swatch-menu button {
+  width: 28px;
+  height: 28px;
+  min-height: 0;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+}
+
+.swatch-menu button.on {
+  border-color: var(--text);
 }

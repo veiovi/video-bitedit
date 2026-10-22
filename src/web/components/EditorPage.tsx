@@ -6,16 +6,20 @@ import { readDraft } from '../drafts';
 import { SKINS, applySkin, currentSkin } from '../skins';
 import {
   activeTimeline,
+  copyAttributes,
   copySelection,
   cutSelection,
   deleteSelection,
   duplicateSelection,
+  freezeAtPlayhead,
   nudgeSelection,
+  pasteAttributesToSelection,
   pasteClipboard,
   rippleScope,
   seekEdit,
   toggleEnabledSelection,
   toggleLoop,
+  trimSelectionToPlayhead,
   useEditor,
   zoomToFit,
 } from '../store';
@@ -264,6 +268,13 @@ function useKeyboard() {
         return;
       }
       if (mod && key === 'y') return void (e.preventDefault(), s.redo());
+      // ⌥⌘C / ⌥⌘V copy a clip's look and paste it onto the selection. Matched by physical key, since ⌥ changes e.key on a Mac.
+      if (mod && e.altKey && (e.code === 'KeyC' || e.code === 'KeyV')) {
+        e.preventDefault();
+        if (e.code === 'KeyC') copyAttributes();
+        else pasteAttributesToSelection();
+        return;
+      }
       // CapCut's split: ⌘B splits the selection (or every track) at the playhead; ⇧⌘B splits every track.
       if (mod && key === 'b') {
         e.preventDefault();
@@ -286,6 +297,17 @@ function useKeyboard() {
       if (mod && key === 'v' && s.clipboard?.length) return void (e.preventDefault(), pasteClipboard());
       if (mod && key === 'd') return void (e.preventDefault(), duplicateSelection());
       if (mod) return;
+      // ⌥[ / ⌥] (or ⇧[ / ⇧]) trim the selected clips' start or end to the playhead.
+      if ((e.altKey || e.shiftKey) && (e.code === 'BracketLeft' || e.code === 'BracketRight')) {
+        e.preventDefault();
+        trimSelectionToPlayhead(e.code === 'BracketLeft' ? 'start' : 'end');
+        return;
+      }
+      if (e.shiftKey && e.code === 'KeyF') {
+        e.preventDefault();
+        freezeAtPlayhead();
+        return;
+      }
       switch (key) {
         case ' ':
         case 'k':

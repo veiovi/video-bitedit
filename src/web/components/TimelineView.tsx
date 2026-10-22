@@ -19,9 +19,13 @@ import {
   moveClips,
   moveMainClip,
   removeTrack,
+  renameTrack,
+  reorderTrack,
   rippleTrim,
+  rollEdit,
   setFade,
   setVolume,
+  slipClip,
   snap,
   snapPoints,
   splitAt,
@@ -29,19 +33,40 @@ import {
   updateTimeline,
   updateTrack,
 } from '../../shared/edits';
-import { type Asset, type Clip, type Timeline, type Track, TRACK_LIMITS, clipEnd, fadeEnvelope, formatTimecode, newId, parseTimecode, timelineDuration, trackAccepts, trackColor } from '../../shared/project';
+import {
+  type Asset,
+  type Clip,
+  type Timeline,
+  type Track,
+  type TrackHeight,
+  TRACK_LIMITS,
+  TRACK_PALETTE,
+  clipEnd,
+  clipSpeed,
+  fadeEnvelope,
+  formatTimecode,
+  newId,
+  parseTimecode,
+  speedLabel,
+  timelineDuration,
+  trackAccepts,
+  trackColor,
+} from '../../shared/project';
 import { defaultTextStyle, type TextPreset } from '../../shared/themes';
 import { peaksUrl, thumbUrl } from '../api';
 import { Icon } from './Icon';
 import {
   activeTimeline,
+  copyAttributes,
   copySelection,
   cutSelection,
   deleteSelection,
   detachSelection,
   detachable,
   duplicateSelection,
+  freezeAtPlayhead,
   loopRange,
+  pasteAttributesToSelection,
   pasteClipboard,
   replaceWithAsset,
   rippleScope,
@@ -67,9 +92,21 @@ function useHeaderWidth(): number {
     mq.addEventListener('change', on);
     return () => mq.removeEventListener('change', on);
   }, []);
-  return narrow ? 112 : 168;
+  return narrow ? 112 : 212;
 }
-const ROW_H = { video: 56, audio: 44 } as const;
+/** Row heights per track kind and height setting (Track.height; normal when unset). */
+const ROW_HEIGHTS = {
+  video: { small: 36, normal: 56, large: 96 },
+  audio: { small: 30, normal: 44, large: 80 },
+} as const;
+const rowH = (t: Track) => ROW_HEIGHTS[t.kind][t.height ?? 'normal'];
+const NEXT_HEIGHT: Record<TrackHeight, TrackHeight> = { small: 'normal', normal: 'large', large: 'small' };
+/** Colours offered by a track's swatch. */
+const SWATCHES = TRACK_PALETTE.slice(0, 8);
+/** Clips whose source can slip under them. */
+const slippable = (c: Clip) => (c.kind === 'video' || c.kind === 'audio') && c.in !== undefined;
+/** While dragging within this many pixels of the timeline's left or right edge, it scrolls. */
+const AUTO_SCROLL_ZONE = 48;
 /** The volume line stays this many pixels inside the clip's top (MAX_VOLUME) and bottom (silent). */
 const VOLUME_PAD = 4;
 
@@ -155,12 +192,16 @@ function rulerStep(pxPerFrame: number, fps: number): number {
   return 3600;
 }
 
+/** Zoomed in further than this (pixels per frame), the ruler marks every frame. */
+const FRAME_TICKS_PX = 6;
+
 const Ruler = memo(function Ruler({ width, fps, pxPerFrame }: { width: number; fps: number; pxPerFrame: number }) {
   const step = rulerStep(pxPerFrame, fps);
   const ticks: number[] = [];
   for (let sec = 0; sec * fps * pxPerFrame < width; sec += step) ticks.push(sec);
   return (
     <>
+      {pxPerFrame > FRAME_TICKS_PX && <div className="frame-ticks" style={{ backgroundSize: `${pxPerFrame}px 100%` }} />}
       {ticks.map((sec) => (
         <div key={sec} className="tick" style={{ left: sec * fps * pxPerFrame }}>
           <span>{formatTimecode(sec * fps, fps).replace(/:00$/, '')}</span>
@@ -177,7 +218,8 @@ function Playhead({ height }: { height: number }) {
 }
 
 interface DragState {
-  kind: 'move' | 'trim-start' | 'trim-end' | 'fade-in' | 'fade-out' | 'volume';
+  /** `roll` moves the cut between two touching clips (⌥-drag an edge); `slip` changes a clip's in-point in place (⌥-drag its body). */
+  kind: 'move' | 'trim-start' | 'trim-end' | 'fade-in' | 'fade-out' | 'volume' | 'roll' | 'slip';
   clipId: string;
   pointerX: number;
   pointerY: number;
@@ -193,7 +235,14 @@ interface DragState {
   volumeSpan: number;
   volumeY: number;
   lastY: number;
+  /** Roll: the clips either side of the cut. */
+  roll?: { left: string; right: string };
+  /** The timeline's horizontal scroll when the drag began, so scrolling mid-drag carries the drag along. */
+  scrollX: number;
 }
+
+/** The parts of a pointer event a drag step needs, so auto-scroll can replay the last one. */
+type PointerLike = Pick<PointerEvent, 'clientX' | 'clientY' | 'shiftKey' | 'metaKey' | 'ctrlKey'>;
 
 /** A right-click menu on a clip (acting on the selection) or on empty track space. */
 interface MenuState {
@@ -222,6 +271,9 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
   const scrollRef = useRef<HTMLDivElement>(null);
   const tracksRef = useRef<HTMLDivElement>(null);
   const drag = useRef<DragState | null>(null);
+  /** The last pointer position during a drag, and the auto-scroll frame request. */
+  const lastPointer = useRef<PointerLike | null>(null);
+  const autoScroll = useRef<number | null>(null);
   const volumeBase = useRef<typeof doc | null>(null);
   const [dropHint, setDropHint] = useState<DropTarget | null>(null);
   /** Box selection on empty timeline space, in pixels relative to the tracks area. */
@@ -233,6 +285,12 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
   const [hud, setHud] = useState<{ x: number; y: number; text: string } | null>(null);
   const [guide, setGuide] = useState<number | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
+  /** Track header gestures: the name being edited, the colour swatches, and a header being dragged to a new position. */
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [swatches, setSwatches] = useState<{ trackId: string; x: number; y: number } | null>(null);
+  const headerDrag = useRef<{ id: string; y: number; pointerId: number; moved: boolean } | null>(null);
+  const [trackDrop, setTrackDrop] = useState<{ id: string; index: number; y: number } | null>(null);
+  const headersRef = useRef<HTMLDivElement>(null);
   const mainId = mainTrackId(timeline);
   const HEADER_W = useHeaderWidth();
   const solo = useEditor((s) => s.solo);
@@ -245,7 +303,7 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
   const loopSpan = loop ? (loopRange({ doc, timelineId, selection }) ?? { start: 0, end: duration }) : null;
   const contentWidth = Math.max((duration + timeline.fps * 20) * px, (scrollRef.current?.clientWidth ?? 1200) - HEADER_W);
   const assetById = useMemo(() => new Map(assets.map((a) => [a.id, a])), [assets]);
-  const totalHeight = timeline.tracks.reduce((h, t) => h + ROW_H[t.kind], 0);
+  const totalHeight = timeline.tracks.reduce((h, t) => h + rowH(t), 0);
   // Every second audio track gets the alternate clip colour (voice vs music in the skins).
   const colors = new Map(
     timeline.tracks.map((t) => [t.id, trackColor(t, timeline.tracks.filter((x) => x.kind === t.kind).indexOf(t))]),
@@ -300,6 +358,22 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
     };
   }, [menu]);
 
+  // The colour swatches close on Escape and on a press outside them.
+  useEffect(() => {
+    if (!swatches) return;
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent && e.key !== 'Escape') return;
+      if (e.type === 'pointerdown' && (e.target as HTMLElement).closest('.swatch-menu')) return;
+      setSwatches(null);
+    };
+    window.addEventListener('pointerdown', close, true);
+    window.addEventListener('keydown', close, true);
+    return () => {
+      window.removeEventListener('pointerdown', close, true);
+      window.removeEventListener('keydown', close, true);
+    };
+  }, [swatches]);
+
   function frameAt(clientX: number): number {
     const rect = tracksRef.current!.getBoundingClientRect();
     return Math.max(0, Math.round((clientX - rect.left) / px));
@@ -309,7 +383,7 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
     const rect = tracksRef.current!.getBoundingClientRect();
     let y = clientY - rect.top;
     for (const t of timeline.tracks) {
-      y -= ROW_H[t.kind];
+      y -= rowH(t);
       if (y < 0) return t;
     }
     return undefined;
@@ -327,7 +401,20 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
     if (!state.canEdit) return;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     let base = activeTimeline(state);
-    // ⌥-drag moves copies and leaves the originals where they are.
+    let roll: DragState['roll'];
+    if (e.altKey && kind === 'move' && !e.shiftKey && group.length === 1 && slippable(clip)) {
+      // ⌥-drag a video or audio clip: slip it (change what part of the source plays, in place).
+      kind = 'slip';
+    } else if (e.altKey && (kind === 'trim-start' || kind === 'trim-end')) {
+      // ⌥-drag the cut between two touching clips: roll it.
+      const onTrack = base.clips.filter((c) => c.trackId === clip.trackId && c.id !== clip.id);
+      const other = kind === 'trim-end' ? onTrack.find((c) => c.start === clipEnd(clip)) : onTrack.find((c) => clipEnd(c) === clip.start);
+      if (other) {
+        roll = kind === 'trim-end' ? { left: clip.id, right: other.id } : { left: other.id, right: clip.id };
+        kind = 'roll';
+      }
+    }
+    // ⌥⇧-drag (or ⌥-drag of anything that cannot slip) moves copies and leaves the originals where they are.
     const duplicate = kind === 'move' && e.altKey;
     if (duplicate) {
       const copyOf = new Map(group.map((id) => [id, newId()]));
@@ -350,6 +437,8 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
       volumeSpan: Math.max(1, (clipEl?.getBoundingClientRect().height ?? 44) - 2 * VOLUME_PAD),
       volumeY: volumeToY(clip.volume ?? 1),
       lastY: e.clientY,
+      roll,
+      scrollX: scrollRef.current?.scrollLeft ?? 0,
     };
   }
 
@@ -384,7 +473,8 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
       selectSide(e, state.tool === 'forward' ? clip.start : clip.start + clip.duration, clip.trackId, clip);
       return;
     }
-    if (e.shiftKey || e.metaKey) {
+    // ⇧-click and ⌘-click toggle the clip in the selection; ⌥⇧-drag is a copy instead.
+    if ((e.shiftKey && !e.altKey) || e.metaKey) {
       state.select(state.selection.includes(clip.id) ? state.selection.filter((id) => id !== clip.id) : [...state.selection, clip.id]);
       return;
     }
@@ -428,8 +518,8 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
     let top = 0;
     const rows = new Map<string, [number, number]>();
     for (const tr of t.tracks) {
-      rows.set(tr.id, [top, top + ROW_H[tr.kind]]);
-      top += ROW_H[tr.kind];
+      rows.set(tr.id, [top, top + rowH(tr)]);
+      top += rowH(tr);
     }
     return t.clips
       .filter((c) => {
@@ -439,7 +529,45 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
       .map((c) => c.id);
   }
 
+  /** Drags that follow the pointer along the timeline, so reaching an edge scrolls it. */
+  const scrollsWhileDragging = (d: DragState | null) =>
+    Boolean(d?.moved && (d.kind === 'move' || d.kind === 'trim-start' || d.kind === 'trim-end' || d.kind === 'roll'));
+
+  /** Scroll speed (pixels per frame) while a drag is near the timeline's left or right edge, or 0. */
+  function edgeScroll(clientX: number): number {
+    const el = scrollRef.current;
+    if (!el) return 0;
+    const r = el.getBoundingClientRect();
+    const left = r.left + HEADER_W;
+    const k = (d: number) => Math.ceil(Math.min(1, d / AUTO_SCROLL_ZONE) * 20);
+    if (clientX < left + AUTO_SCROLL_ZONE && el.scrollLeft > 0) return -k(left + AUTO_SCROLL_ZONE - clientX);
+    if (clientX > r.right - AUTO_SCROLL_ZONE) return k(clientX - (r.right - AUTO_SCROLL_ZONE));
+    return 0;
+  }
+
+  /** Keep scrolling while the pointer rests near an edge mid-drag, replaying the last move so the drag follows. */
+  function autoScrollStep() {
+    autoScroll.current = null;
+    const p = lastPointer.current;
+    const el = scrollRef.current;
+    if (!p || !el || !(marquee.current || scrollsWhileDragging(drag.current))) return;
+    const v = edgeScroll(p.clientX);
+    if (v === 0) return;
+    const before = el.scrollLeft;
+    el.scrollLeft = Math.max(0, before + v);
+    if (el.scrollLeft !== before) handleMove(p);
+    autoScroll.current = requestAnimationFrame(autoScrollStep);
+  }
+
   function onPointerMove(e: React.PointerEvent) {
+    lastPointer.current = { clientX: e.clientX, clientY: e.clientY, shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey };
+    handleMove(e);
+    if (autoScroll.current === null && (marquee.current || scrollsWhileDragging(drag.current)) && edgeScroll(e.clientX) !== 0) {
+      autoScroll.current = requestAnimationFrame(autoScrollStep);
+    }
+  }
+
+  function handleMove(e: PointerLike) {
     noSnap.current = e.metaKey || e.ctrlKey;
     const m = marquee.current;
     if (m && !drag.current) {
@@ -455,7 +583,7 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
     }
     const d = drag.current;
     if (!d) return;
-    const dx = (e.clientX - d.pointerX) / px;
+    const dx = (e.clientX - d.pointerX + (scrollRef.current?.scrollLeft ?? 0) - d.scrollX) / px;
     if (!d.moved && Math.abs(e.clientX - d.pointerX) < 3 && Math.abs(e.clientY - d.pointerY) < 3) return;
     d.moved = true;
     const state = useEditor.getState();
@@ -503,6 +631,17 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
       // 100% is sticky within a few pixels, like a snap point.
       const unity = snapping && !noSnap.current && !e.shiftKey && Math.abs(d.volumeY - volumeToY(1)) * d.volumeSpan < 3;
       next = setVolume(base, d.clipId, unity ? 1 : yToVolume(d.volumeY));
+    } else if (d.kind === 'roll' && d.roll) {
+      const cut = clipEnd(base.clips.find((c) => c.id === d.roll!.left)!);
+      const raw = cut + dx;
+      const at = snapFrame(raw, [d.roll.left, d.roll.right]);
+      if (at !== raw) snapLine = at;
+      next = rollEdit(base, d.roll.left, d.roll.right, at, lengths);
+    } else if (d.kind === 'slip') {
+      // The footage follows the pointer: dragging right shows earlier frames. A freeze frame steps one source frame per frame dragged.
+      next = slipClip(base, d.clipId, -Math.round(dx * (clipSpeed(d.baseClip) || 1)), lengths);
+      // Show the clip's first frame in the preview while slipping.
+      if (state.playhead !== d.baseClip.start) state.seek(d.baseClip.start);
     } else if (d.kind === 'fade-in' || d.kind === 'fade-out') {
       const c = d.baseClip;
       next = d.kind === 'fade-in' ? setFade(base, c.id, 'in', (c.fadeIn ?? 0) + dx) : setFade(base, c.id, 'out', (c.fadeOut ?? 0) - dx);
@@ -526,11 +665,21 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
     if (d.kind === 'fade-in') return `Fade in ${((c.fadeIn ?? 0) / fps).toFixed(2)}s`;
     if (d.kind === 'fade-out') return `Fade out ${((c.fadeOut ?? 0) / fps).toFixed(2)}s`;
     if (d.kind === 'volume') return volumeLabel(c.volume ?? 1);
+    if (d.kind === 'roll' && d.roll) {
+      const left = t.clips.find((x) => x.id === d.roll!.left);
+      const before = d.baseTimeline.clips.find((x) => x.id === d.roll!.left);
+      const n = left && before ? clipEnd(left) - clipEnd(before) : 0;
+      return `Roll ${n < 0 ? '−' : '+'}${Math.abs(n)} frame${Math.abs(n) === 1 ? '' : 's'}`;
+    }
+    if (d.kind === 'slip') return `Slip in ${formatTimecode(c.in ?? 0, fps)}`;
     if (d.kind === 'move') return `${d.duplicate ? 'Copy at ' : ''}${formatTimecode(c.start, fps)}  ${secs(c.start - d.baseClip.start)}`;
     return `Length ${(c.duration / fps).toFixed(2)}s  ${secs(c.duration - d.baseClip.duration)}`;
   }
 
   function onPointerUp() {
+    if (autoScroll.current !== null) cancelAnimationFrame(autoScroll.current);
+    autoScroll.current = null;
+    lastPointer.current = null;
     marquee.current = null;
     setBox(null);
     setHud(null);
@@ -636,6 +785,67 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
   }
 
   const setTrack = (trackId: string, patch: Partial<Track>) => useEditor.getState().applyTimeline((t) => updateTrack(t, trackId, patch));
+
+  /**
+   * Dragging a track header up or down reorders tracks of its kind. The
+   * pointer is captured only once the drag starts, so double-clicking the
+   * name still renames it.
+   */
+  function onHeaderPointerDown(e: React.PointerEvent, track: Track) {
+    if (e.button !== 0 || !canEdit || (e.target as HTMLElement).closest('button, input')) return;
+    headerDrag.current = { id: track.id, y: e.clientY, pointerId: e.pointerId, moved: false };
+  }
+
+  /** Where a dragged header would land: its index among the other tracks of its kind, and the y of the insertion line. */
+  function trackDropAt(clientY: number, id: string): { index: number; y: number } {
+    const top = (e: HTMLElement | null) => e?.getBoundingClientRect().top ?? 0;
+    const y = clientY - top(headersRef.current);
+    const track = timeline.tracks.find((t) => t.id === id)!;
+    let at = 0;
+    const others: { top: number; bottom: number }[] = [];
+    for (const t of timeline.tracks) {
+      if (t.kind === track.kind && t.id !== id) others.push({ top: at, bottom: at + rowH(t) });
+      at += rowH(t);
+    }
+    const index = others.filter((o) => (o.top + o.bottom) / 2 < y).length;
+    return { index, y: index < others.length ? others[index].top : (others.at(-1)?.bottom ?? 0) };
+  }
+
+  function onHeaderPointerMove(e: React.PointerEvent) {
+    const h = headerDrag.current;
+    if (!h) return;
+    if (!h.moved) {
+      if (Math.abs(e.clientY - h.y) < 4) return;
+      const track = timeline.tracks.find((t) => t.id === h.id);
+      if (track?.locked) {
+        headerDrag.current = null;
+        useEditor.getState().setToast(`${track.name} is locked: unlock it to move it`);
+        return;
+      }
+      h.moved = true;
+      (e.currentTarget as HTMLElement).setPointerCapture(h.pointerId);
+    }
+    setTrackDrop({ id: h.id, ...trackDropAt(e.clientY, h.id) });
+  }
+
+  function onHeaderPointerUp() {
+    const h = headerDrag.current;
+    const drop = trackDrop;
+    headerDrag.current = null;
+    setTrackDrop(null);
+    if (!h?.moved || !drop) return;
+    const s = useEditor.getState();
+    const mainBefore = mainTrackId(activeTimeline(s));
+    s.applyTimeline((t) => reorderTrack(t, h.id, drop.index));
+    const after = activeTimeline(useEditor.getState());
+    const mainAfter = mainTrackId(after);
+    if (mainAfter !== mainBefore) s.setToast(`${after.tracks.find((t) => t.id === mainAfter)?.name} is now the main track (the bottom video track)`);
+  }
+
+  function commitRename(trackId: string, name: string) {
+    setRenaming(null);
+    useEditor.getState().applyTimeline((t) => renameTrack(t, trackId, name));
+  }
 
   const playhead = useEditor((s) => s.playhead);
   const videoCount = timeline.tracks.filter((t) => t.kind === 'video').length;
@@ -782,7 +992,7 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
           <div className="ruler-row">
             <div className="corner" style={{ width: HEADER_W }} />
             <div
-              className="ruler"
+              className={`ruler ${px > FRAME_TICKS_PX ? 'frames' : ''}`}
               style={{ width: contentWidth }}
               onPointerDown={onRulerPointer}
               onPointerMove={onRulerPointer}
@@ -814,17 +1024,64 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
             </div>
           </div>
           <div className="tracks-row">
-            <div className="track-headers" style={{ width: HEADER_W }}>
+            <div className="track-headers" style={{ width: HEADER_W }} ref={headersRef}>
               {timeline.tracks.map((t) => (
-                <div key={t.id} className={`track-header ${t.kind} ${silenced(t) ? 'silenced' : ''}`} style={{ height: ROW_H[t.kind], ...tint(t.id) }}>
-                  <span
-                    className={`track-badge ${t.kind} ${t.id === mainId ? 'main' : ''}`}
-                    title={t.id === mainId ? 'Main track: the magnet keeps it gapless' : undefined}
-                  >
-                    {t.name}
-                  </span>
+                <div
+                  key={t.id}
+                  className={`track-header ${t.kind} ${silenced(t) ? 'silenced' : ''} h-${t.height ?? 'normal'} ${trackDrop?.id === t.id ? 'dragging' : ''}`}
+                  style={{ height: rowH(t), ...tint(t.id) }}
+                  onPointerDown={(e) => onHeaderPointerDown(e, t)}
+                  onPointerMove={onHeaderPointerMove}
+                  onPointerUp={onHeaderPointerUp}
+                  onPointerCancel={onHeaderPointerUp}
+                >
+                  <button
+                    className="track-color"
+                    title="Track colour"
+                    aria-label={`${t.name} colour`}
+                    disabled={!canEdit}
+                    onClick={(e) => {
+                      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                      setSwatches(swatches?.trackId === t.id ? null : { trackId: t.id, x: r.right + 4, y: r.top });
+                    }}
+                  />
+                  {renaming === t.id ? (
+                    <input
+                      className="track-rename"
+                      aria-label="Track name"
+                      autoFocus
+                      defaultValue={t.name}
+                      maxLength={24}
+                      onFocus={(e) => e.target.select()}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') commitRename(t.id, e.currentTarget.value);
+                        if (e.key === 'Escape') setRenaming(null);
+                      }}
+                      onBlur={(e) => commitRename(t.id, e.target.value)}
+                    />
+                  ) : (
+                    <span
+                      className={`track-badge ${t.kind} ${t.id === mainId ? 'main' : ''}`}
+                      title={`${t.name}${t.id === mainId ? ' · main track: the magnet keeps it gapless' : ''}${canEdit ? '\nDouble-click to rename; drag the header to reorder' : ''}`}
+                      onDoubleClick={() => canEdit && setRenaming(t.id)}
+                    >
+                      {/* Long names are shortened here so the header buttons keep their room. */}
+                      {t.name.length > 7 ? `${t.name.slice(0, 6)}…` : t.name}
+                    </span>
+                  )}
                   <span className="track-label">{t.kind === 'video' ? 'Video' : 'Audio'}</span>
                   <div className="track-buttons">
+                    <button
+                      className="track-height"
+                      title={`Track height: ${t.height ?? 'normal'} (click for ${NEXT_HEIGHT[t.height ?? 'normal']})`}
+                      disabled={!canEdit}
+                      onClick={() => {
+                        const next = NEXT_HEIGHT[t.height ?? 'normal'];
+                        setTrack(t.id, { height: next === 'normal' ? undefined : next });
+                      }}
+                    >
+                      <Icon name="height" />
+                    </button>
                     {t.kind === 'video' ? (
                       <button
                         className={t.hidden ? 'on warn' : ''}
@@ -897,6 +1154,7 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
                   />
                 </div>
               ))}
+              {trackDrop && <div className="track-drop-line" style={{ top: trackDrop.y }} />}
             </div>
             <div
               className="tracks"
@@ -931,7 +1189,7 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
                 <div
                   key={t.id}
                   className={`track-lane ${t.kind} ${t.locked ? 'locked' : ''} ${silenced(t) ? 'silenced' : ''} ${dropHint?.trackId === t.id ? 'drop' : ''}`}
-                  style={{ height: ROW_H[t.kind], ...tint(t.id) }}
+                  style={{ height: rowH(t), ...tint(t.id) }}
                 >
                   {timeline.clips
                     .filter((c) => c.trackId === t.id)
@@ -983,6 +1241,24 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
         </div>
       </div>
       {menu && <ClipMenu menu={menu} onClose={() => setMenu(null)} />}
+      {swatches && (
+        <div className="swatch-menu" role="menu" style={{ left: Math.min(swatches.x, window.innerWidth - 180), top: Math.min(swatches.y, window.innerHeight - 90) }}>
+          {SWATCHES.map((c) => (
+            <button
+              key={c.hex}
+              role="menuitem"
+              className={colors.get(swatches.trackId) === c.hex ? 'on' : ''}
+              style={{ background: c.hex }}
+              title={c.name}
+              aria-label={c.name}
+              onClick={() => {
+                setTrack(swatches.trackId, { color: c.hex });
+                setSwatches(null);
+              }}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1026,6 +1302,7 @@ function ClipMenu({ menu, onClose }: { menu: MenuState; onClose: () => void }) {
   const t = activeTimeline(s);
   const picked = t.clips.filter((c) => s.selection.includes(c.id));
   const canSplit = picked.some((c) => c.start < s.playhead && s.playhead < clipEnd(c));
+  const canFreeze = picked.some((c) => c.kind === 'video' && c.start <= s.playhead && s.playhead < clipEnd(c));
   const allOff = picked.length > 0 && picked.every((c) => c.disabled);
   const item = (label: string, keys: string, run: () => void, disabled = false) => (
     <button
@@ -1042,7 +1319,7 @@ function ClipMenu({ menu, onClose }: { menu: MenuState; onClose: () => void }) {
   );
   // Keep the menu on screen.
   const left = Math.min(menu.x, window.innerWidth - 230);
-  const top = Math.min(menu.y, window.innerHeight - (menu.onClip ? 330 : 90));
+  const top = Math.min(menu.y, window.innerHeight - (menu.onClip ? 440 : 90));
   return (
     <div className="context-menu" role="menu" style={{ left, top }} onContextMenu={(e) => e.preventDefault()}>
       {menu.onClip ? (
@@ -1052,6 +1329,10 @@ function ClipMenu({ menu, onClose }: { menu: MenuState; onClose: () => void }) {
           {item('Cut', '⌘X', cutSelection)}
           {item('Paste at playhead', '⌘V', () => pasteClipboard(), !s.clipboard?.length)}
           {item('Duplicate', '⌘D', duplicateSelection)}
+          <hr />
+          {item('Freeze frame', '⇧F', freezeAtPlayhead, !canFreeze)}
+          {item('Copy attributes', '⌥⌘C', copyAttributes, picked.length !== 1)}
+          {item('Paste attributes', '⌥⌘V', pasteAttributesToSelection, !s.attributes)}
           <hr />
           {item('Detach audio', '', detachSelection, detachable(picked).length === 0)}
           {item(allOff ? 'Turn clip on' : 'Turn clip off', '⇧E', toggleEnabledSelection)}
@@ -1101,7 +1382,7 @@ function Waveform({ peaks, clip, fps, width }: { peaks: number[]; clip: Clip; fp
   if (width < 4) return null;
   const bars = Math.min(Math.floor(width / 3), 1500);
   const from = ((clip.in ?? 0) / fps) * PEAKS_PER_SECOND;
-  const span = (clip.duration / fps) * PEAKS_PER_SECOND;
+  const span = ((clip.duration * clipSpeed(clip)) / fps) * PEAKS_PER_SECOND;
   let d = '';
   for (let i = 0; i < bars; i++) {
     const a = Math.floor(from + (i / bars) * span);
@@ -1176,6 +1457,16 @@ const ClipView = memo(function ClipView({
         <Icon name={KIND_ICON[clip.kind]} />
         <span>{label}</span>
         {clip.disabled && <span className="badge">Off</span>}
+        {clip.freeze && (
+          <span className="badge freeze" title="Freeze frame: one source frame held">
+            Freeze
+          </span>
+        )}
+        {(clip.kind === 'video' || clip.kind === 'audio') && !clip.freeze && clipSpeed(clip) !== 1 && (
+          <span className="badge speed" title={`Plays at ${speedLabel(clipSpeed(clip))} speed`}>
+            {speedLabel(clipSpeed(clip))}
+          </span>
+        )}
         {clip.muted && (
           <span className="badge" title="Sound off: its audio was detached or muted">
             <Icon name="mute" />

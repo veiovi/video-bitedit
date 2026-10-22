@@ -1,6 +1,24 @@
 import type { PlayerRef } from '@remotion/player';
 import { create } from 'zustand';
-import { adjacentEditPoint, closeGaps, closeRange, deleteClips, detachAudio, mainTrackId, moveClips, pasteClips, rippleDeleteClips, toggleClipsEnabled, updateTimeline } from '../shared/edits';
+import {
+  type ClipAttributes,
+  adjacentEditPoint,
+  clipAttributes,
+  closeGaps,
+  closeRange,
+  deleteClips,
+  detachAudio,
+  freezeFrame,
+  mainTrackId,
+  moveClips,
+  pasteAttributes,
+  pasteClips,
+  rippleDeleteClips,
+  setSpeed,
+  toggleClipsEnabled,
+  trimToFrame,
+  updateTimeline,
+} from '../shared/edits';
 import { type Asset, type Clip, type ProjectDoc, type ServerInfo, type Timeline, clipEnd, newId, timelineDuration, trackAccepts } from '../shared/project';
 
 const HISTORY_LIMIT = 200;
@@ -60,6 +78,8 @@ export interface EditorState {
   linkage: boolean;
   /** Clips copied or cut in this tab, waiting to be pasted. */
   clipboard: Clip[] | null;
+  /** A clip's look copied with Copy attributes (⌥⌘C), waiting to be pasted onto other clips. */
+  attributes: ClipAttributes | null;
   /** A replacement waiting for the replace dialog: which clip gets which asset. */
   replacing: { clipId: string; assetId: string } | null;
   /** An empty stretch of a track, selected by clicking it; Delete closes it. */
@@ -120,6 +140,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   ripple: readFlag(RIPPLE_KEY),
   linkage: readFlag(LINKAGE_KEY),
   clipboard: null,
+  attributes: null,
   replacing: null,
   gap: null,
   tool: 'select',
@@ -197,7 +218,9 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   seek: (frame) => {
-    const f = Math.max(0, Math.round(frame));
+    // The last frame is the end of the timeline; an empty timeline stays at 0.
+    const last = get().doc ? Math.max(0, timelineDuration(activeTimeline(get())) - 1) : 0;
+    const f = Math.min(last, Math.max(0, Math.round(frame)));
     get().player?.seekTo(f);
     set({ playhead: f });
   },
@@ -362,12 +385,89 @@ export function toggleLoop() {
   s.setToast(loop ? `Loop on: repeats ${loopRange(s) ? 'the selected clips' : 'the whole timeline'}` : 'Loop off');
 }
 
+/** Main-track ripples while the magnet is on: where they reach, for the pure ops' `rippleMain`/`ripple` options. */
+function magnetRipple(s: EditorState, t: Timeline): { onlyTrack?: string } | undefined {
+  return s.ripple ? { onlyTrack: rippleScope(t, s.linkage) } : undefined;
+}
+
+/** Change the speed of the given clips (video and audio); main-track clips ripple while the magnet is on. */
+export function setClipSpeed(ids: string[], speed: number) {
+  const s = useEditor.getState();
+  s.applyTimeline((t) => {
+    const lengths = sourceFrames(s.assets, t.fps);
+    const main = mainTrackId(t);
+    return ids.reduce((tl, id) => {
+      const onMain = tl.clips.find((c) => c.id === id)?.trackId === main;
+      return setSpeed(tl, id, speed, lengths, onMain ? magnetRipple(s, tl) : undefined);
+    }, t);
+  });
+}
+
+/**
+ * Freeze frame (⇧F): hold the frame under the playhead of the selected video
+ * clip (or the top video clip there) for two seconds. On the main track with
+ * the magnet on it inserts and pushes the rest right; elsewhere it overwrites.
+ */
+export function freezeAtPlayhead() {
+  const s = useEditor.getState();
+  const t = activeTimeline(s);
+  const at = s.playhead;
+  const under = (c: Clip) => c.kind === 'video' && !c.disabled && c.start <= at && at < clipEnd(c);
+  const videoOrder = t.tracks.filter((tr) => tr.kind === 'video').map((tr) => tr.id);
+  const clip =
+    t.clips.find((c) => s.selection.includes(c.id) && under(c)) ??
+    t.clips.filter(under).sort((a, b) => videoOrder.indexOf(a.trackId) - videoOrder.indexOf(b.trackId))[0];
+  if (!clip) return s.setToast('Freeze frame: put the playhead over a video clip');
+  if (t.tracks.find((tr) => tr.id === clip.trackId)?.locked) return s.setToast('Freeze frame: the track is locked');
+  const before = new Set(t.clips.map((c) => c.id));
+  const insert = clip.trackId === mainTrackId(t) ? magnetRipple(s, t) : undefined;
+  s.applyTimeline((tl) => freezeFrame(tl, clip.id, at, tl.fps * 2, insert));
+  const still = activeTimeline(useEditor.getState()).clips.find((c) => !before.has(c.id) && c.freeze);
+  if (still) s.select([still.id]);
+}
+
+/** Copy attributes (⌥⌘C): keep the selected clip's look to paste onto others. */
+export function copyAttributes(): boolean {
+  const s = useEditor.getState();
+  const [clip] = selectedClips(s);
+  if (!clip) return false;
+  useEditor.setState({ attributes: clipAttributes(clip) });
+  s.setToast('Copied the clip\'s look: ⌥⌘V pastes it onto the selected clips');
+  return true;
+}
+
+/** Paste attributes (⌥⌘V) onto every selected clip. */
+export function pasteAttributesToSelection() {
+  const s = useEditor.getState();
+  const attrs = s.attributes;
+  if (!attrs || s.selection.length === 0) return;
+  s.applyTimeline((t) => pasteAttributes(t, s.selection, attrs, sourceFrames(s.assets, t.fps), magnetRipple(s, t)));
+}
+
+/**
+ * Trim the start or end of the selected clips to the playhead (⌥[ and ⌥]),
+ * shortening them or, as far as the source allows, lengthening them.
+ * Main-track clips ripple while the magnet is on.
+ */
+export function trimSelectionToPlayhead(edge: 'start' | 'end') {
+  const s = useEditor.getState();
+  if (s.selection.length === 0) return s.setToast('Select a clip to trim it to the playhead');
+  const t = activeTimeline(s);
+  const rippleMain = magnetRipple(s, t);
+  const main = mainTrackId(t);
+  const picked = t.clips.filter((c) => s.selection.includes(c.id));
+  s.applyTimeline((tl) => trimToFrame(tl, s.selection, edge, s.playhead, sourceFrames(s.assets, tl.fps), rippleMain));
+  // A rippled head trim pulls the clip back to where it started.
+  const rippled = picked.filter((c) => c.trackId === main && c.start < s.playhead && s.playhead < clipEnd(c));
+  if (edge === 'start' && rippleMain && rippled.length) s.seek(Math.min(...rippled.map((c) => c.start)));
+}
+
 /** Zoom so the whole timeline fits the visible width. */
 export function zoomToFit() {
   const s = useEditor.getState();
   const t = activeTimeline(s);
   const scroller = document.querySelector('.timeline-scroll');
-  const width = (scroller?.clientWidth ?? 1000) - 180;
+  const width = (scroller?.clientWidth ?? 1000) - 224;
   s.setZoom(width / Math.max(t.fps * 5, timelineDuration(t)));
   if (scroller) scroller.scrollLeft = 0;
 }

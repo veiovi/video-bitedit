@@ -1,11 +1,25 @@
-import { Fragment } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { canReplace, updateClip, updateTimeline } from '../../shared/edits';
 import { EFFECTS, GRADES, TRANSITIONS } from '../../shared/effects';
-import { type Clip, type Effect, type EffectType, type GradePreset, type ProjectDoc, type TextStyle, type Timeline, type TransitionType, formatTimecode } from '../../shared/project';
+import {
+  type Clip,
+  type Effect,
+  type EffectType,
+  type GradePreset,
+  type ProjectDoc,
+  SPEED_LIMITS,
+  SPEED_PRESETS,
+  type TextStyle,
+  type Timeline,
+  type TransitionType,
+  clipSpeed,
+  formatTimecode,
+  speedLabel,
+} from '../../shared/project';
 import { THEMES, type TextAnimation, type TextPreset, defaultTextStyle, getTheme } from '../../shared/themes';
 import { mediaUrl } from '../api';
 import { analyseClipColor } from '../autocolor';
-import { activeTimeline, detachSelection, replaceWithAsset, useEditor } from '../store';
+import { activeTimeline, detachSelection, replaceWithAsset, setClipSpeed, useEditor } from '../store';
 import { HelpTip } from './Help';
 import { SHORTCUTS, type TipId } from '../help';
 
@@ -203,7 +217,7 @@ async function addAutoColor(clip: Clip, effects: Effect[]) {
   const from = (clip.in ?? 0) / fps;
   s.setToast('Analysing colour…');
   try {
-    const correction = await analyseClipColor(mediaUrl(s.projectId, asset.id), asset.kind, from, from + clip.duration / fps);
+    const correction = await analyseClipColor(mediaUrl(s.projectId, asset.id), asset.kind, from, from + (clip.duration * clipSpeed(clip)) / fps);
     s.applyTimeline((t) => updateClip(t, clip.id, { effects: [...effects, { type: 'autoColor', amount: 1, ...correction }] }));
     s.setToast('Auto colour applied');
   } catch (err) {
@@ -300,6 +314,51 @@ function EffectsSection({ clip, disabled }: { clip: Clip; disabled: boolean }) {
   );
 }
 
+/**
+ * Speed presets and a typed speed. Each change is one undo step; the clip's
+ * length follows (see setSpeed), rippling on the main track with the magnet on.
+ */
+function SpeedField({ clip, disabled }: { clip: Clip; disabled: boolean }) {
+  const speed = clipSpeed(clip);
+  const [text, setText] = useState(String(speed));
+  useEffect(() => setText(String(speed)), [speed]);
+  const commit = () => {
+    const v = Number(text);
+    if (Number.isFinite(v) && v > 0) setClipSpeed([clip.id], v);
+    else setText(String(speed));
+  };
+  return (
+    <>
+      <div className="field speed-field">
+        <span>Speed</span>
+        <div className="speed-presets" role="group" aria-label="Speed presets">
+          {SPEED_PRESETS.map((p) => (
+            <button key={p} className={`small ${p === speed ? 'on' : ''}`} disabled={disabled} aria-pressed={p === speed} onClick={() => setClipSpeed([clip.id], p)}>
+              {speedLabel(p)}
+            </button>
+          ))}
+        </div>
+      </div>
+      <label className="field">
+        <span>Custom</span>
+        <input
+          type="number"
+          min={SPEED_LIMITS.min}
+          max={SPEED_LIMITS.max}
+          step={0.05}
+          value={text}
+          disabled={disabled}
+          aria-label="Speed"
+          onChange={(e) => setText(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => e.key === 'Enter' && commit()}
+        />
+        <output>×</output>
+      </label>
+    </>
+  );
+}
+
 /** Swap the clip's media for another file in the bin; drag-free, so it works on phones. */
 function ReplaceMedia({ clip, disabled }: { clip: Clip; disabled: boolean }) {
   const assets = useEditor((s) => s.assets);
@@ -331,7 +390,7 @@ function ClipInspector({ clip, timeline }: { clip: Clip; timeline: Timeline }) {
   const asset = useEditor((s) => s.assets.find((a) => a.id === clip.assetId));
   const fps = timeline.fps;
   const disabled = !canEdit;
-  const hasAudio = clip.kind === 'video' || clip.kind === 'audio';
+  const hasAudio = (clip.kind === 'video' || clip.kind === 'audio') && !clip.freeze;
   const visual = clip.kind !== 'audio';
   const generated = clip.kind === 'text' || clip.kind === 'caption';
   const pct = (v: number) => `${Math.round(v * 100)}%`;
@@ -397,8 +456,10 @@ function ClipInspector({ clip, timeline }: { clip: Clip; timeline: Timeline }) {
         <SecondsField label="Start" frames={clip.start} fps={fps} disabled={disabled} onChange={(f) => liveClip(clip.id, { start: f })} />
         <SecondsField label="Length" frames={clip.duration} fps={fps} disabled={disabled} onChange={(f) => liveClip(clip.id, { duration: Math.max(1, f) })} />
         {clip.in !== undefined && (
-          <SecondsField label="Source in" frames={clip.in} fps={fps} disabled={disabled} onChange={(f) => liveClip(clip.id, { in: f })} />
+          <SecondsField label={clip.freeze ? 'Held frame' : 'Source in'} frames={clip.in} fps={fps} disabled={disabled} onChange={(f) => liveClip(clip.id, { in: f })} />
         )}
+        {clip.freeze && <p className="hint">Freeze frame: holds this source frame, without sound. ⌥-drag the clip to pick another frame.</p>}
+        {(clip.kind === 'video' || clip.kind === 'audio') && !clip.freeze && <SpeedField clip={clip} disabled={disabled} />}
         <SecondsField label="Fade in" frames={clip.fadeIn ?? 0} fps={fps} disabled={disabled} onChange={(f) => liveClip(clip.id, { fadeIn: f })} />
         <SecondsField label="Fade out" frames={clip.fadeOut ?? 0} fps={fps} disabled={disabled} onChange={(f) => liveClip(clip.id, { fadeOut: f })} />
       </Section>
