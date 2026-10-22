@@ -4,6 +4,7 @@ import { formatTimecode, timelineDuration, withSolo } from '../../shared/project
 import { TimelineComposition } from '../../remotion/Timeline';
 import { mediaUrl } from '../api';
 import { Icon } from './Icon';
+import { LevelMeter } from './Meter';
 import { activeTimeline, loopRange, toggleLoop, useEditor } from '../store';
 
 export function Preview() {
@@ -114,6 +115,7 @@ export function Preview() {
             <Icon name="repeat" />
           </button>
         </div>
+        <LevelMeter source="master" orientation="horizontal" />
         <label className="volume" title="Preview volume">
           <Icon name="speaker" />
           <input

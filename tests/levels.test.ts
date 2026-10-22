@@ -32,12 +32,13 @@ describe('levels from peaks', () => {
     expect(clipLevelAt(keyed, 50, p, 30)).toBe(0.5);
   });
 
-  it('mixes tracks with their volume, mutes and hidden video, and sums the master', () => {
+  it('mixes tracks with their volume, mutes and hidden video, and combines the master by power', () => {
     const t = timeline(clip('a', { trackId: 'a1' }), clip('b', { trackId: 'a2' }), clip('v', { kind: 'video', trackId: 'v1' }));
     const lookup = () => peaks(10, 51); // 0.2
     let mix = mixLevels(t, 10, lookup);
     expect(mix.tracks.a1).toBeCloseTo(0.2);
-    expect(mix.master).toBeCloseTo(0.6);
+    // Three tracks at 0.2 combine by power.
+    expect(mix.master).toBeCloseTo(Math.sqrt(3 * 0.04));
     const quiet = { ...t, tracks: t.tracks.map((x) => (x.id === 'a2' ? { ...x, muted: true } : x.id === 'a1' ? { ...x, volume: 0.5 } : x.id === 'v1' ? { ...x, hidden: true } : x)) };
     mix = mixLevels(quiet, 10, lookup);
     expect(mix.tracks.a1).toBeCloseTo(0.1);

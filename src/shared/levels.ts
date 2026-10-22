@@ -65,19 +65,20 @@ export function clipLevelAt(clip: Clip, rel: number, peaks: readonly number[], f
 export interface MixLevels {
   /** Per track (video tracks carry their clips' sound): peak level after track volume, 0 when muted. */
   tracks: Record<string, number>;
-  /** Every track summed: the loudest the mix can reach at that frame. */
+  /** The tracks combined by power (root of the summed squares): the mix's peak, estimated. */
   master: number;
 }
 
 /**
  * Levels at timeline `frame`, as the composition plays it: muted tracks and
- * hidden video tracks are silent, disabled clips skipped. The master adds the
- * tracks' peaks, an upper bound on the mix's sample peak (peaks that do not
- * line up add up to less).
+ * hidden video tracks are silent, disabled clips skipped. The master combines
+ * the tracks by power, which is how the peaks of unrelated sounds (a voice and
+ * a music bed) add up; measured against exports it lands within a dB or two of
+ * the mix's sample peak. The same sound on two tracks can reach the plain sum.
  */
 export function mixLevels(t: Timeline, frame: number, peaks: PeaksLookup): MixLevels {
   const tracks: Record<string, number> = {};
-  let master = 0;
+  let power = 0;
   for (const track of t.tracks) {
     const silent = track.muted || (track.kind === 'video' && track.hidden);
     let level = 0;
@@ -90,9 +91,9 @@ export function mixLevels(t: Timeline, frame: number, peaks: PeaksLookup): MixLe
       level *= track.volume ?? 1;
     }
     tracks[track.id] = level;
-    master += level;
+    power += level * level;
   }
-  return { tracks, master };
+  return { tracks, master: Math.sqrt(power) };
 }
 
 /** The loudest source sample (0..1) anywhere in the stretch of source a clip plays. */

@@ -3412,3 +3412,207 @@ button.help-more:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+/* ---------- Keyframes, ducking and level meters ---------- */
+
+/* An animatable slider: label, range, readout, then ‹ ◆ › */
+.field.slider.keyable {
+  grid-template-columns: 76px minmax(0, 1fr) auto auto;
+  gap: 6px;
+}
+
+.key-tools {
+  display: flex;
+  align-items: center;
+}
+
+.key-tools button.small {
+  min-width: 18px;
+  min-height: 22px;
+  padding: 0 3px;
+  color: var(--dim);
+  line-height: 1;
+}
+
+.key-tools .key-toggle {
+  font-size: 13px;
+}
+
+.key-tools .key-toggle.keyed {
+  color: var(--text);
+}
+
+.key-tools .key-toggle.on {
+  color: var(--selected);
+}
+
+.field.key-ease {
+  grid-template-columns: 76px minmax(0, 1fr) auto;
+  margin-top: -2px;
+}
+
+.field.key-ease select {
+  font-size: 12px;
+}
+
+/* Keyframe diamonds along the bottom edge of the selected clip. */
+.key-marks {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 12px;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.key-diamond {
+  position: absolute;
+  bottom: 2px;
+  width: 9px;
+  height: 9px;
+  margin-left: -4px;
+  transform: rotate(45deg);
+  border: 1px solid var(--clip-ink, #000);
+  background: var(--selected);
+  cursor: ew-resize;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.key-diamond.k-volume {
+  background: var(--wave, var(--selected));
+}
+
+.key-diamond:hover {
+  transform: rotate(45deg) scale(1.3);
+}
+
+/* The volume curve of an audio clip with volume keyframes, on the volume line's scale. */
+.volume-curve {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 4px;
+  bottom: 4px;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.volume-curve svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.volume-curve polyline {
+  fill: none;
+  stroke: var(--clip-ink, currentColor);
+  stroke-width: 1.5px;
+  opacity: 0.85;
+}
+
+.ducking .field.slider {
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+}
+
+.duck-menu {
+  position: fixed;
+  z-index: 60;
+  width: 280px;
+  padding: 10px;
+  border: var(--border-w) solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  font-size: 12px;
+}
+
+/* Level meters: the bar is the whole scale, cut off at the level (see Meter.tsx). */
+.level-meter {
+  position: relative;
+  flex-shrink: 0;
+  overflow: hidden;
+  background: var(--inset);
+  border: var(--border-w) solid var(--border);
+}
+
+.level-meter.vertical {
+  position: absolute;
+  right: 1px;
+  top: 4px;
+  bottom: 4px;
+  width: 5px;
+}
+
+.level-meter.horizontal {
+  width: 96px;
+  height: 8px;
+}
+
+.level-bar {
+  position: absolute;
+  inset: 0;
+  clip-path: inset(100% 0 0 0);
+  background: linear-gradient(to top, #3fae5a 0%, #3fae5a 72%, #d9b23a 80%, #d9b23a 90.5%, #e5484d 91%);
+}
+
+.level-meter.horizontal .level-bar {
+  clip-path: inset(0 100% 0 0);
+  background: linear-gradient(to right, #3fae5a 0%, #3fae5a 72%, #d9b23a 80%, #d9b23a 90.5%, #e5484d 91%);
+}
+
+.level-hold {
+  position: absolute;
+  visibility: hidden;
+  background: var(--text);
+}
+
+.level-hold.over {
+  background: #e5484d;
+}
+
+.level-meter.vertical .level-hold {
+  left: 0;
+  right: 0;
+  height: 1px;
+}
+
+.level-meter.horizontal .level-hold {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
+.level-zero {
+  position: absolute;
+  opacity: 0.35;
+  background: var(--text);
+}
+
+.level-meter.vertical .level-zero {
+  left: 0;
+  right: 0;
+  height: 1px;
+}
+
+.level-meter.horizontal .level-zero {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
+.track-header.audio {
+  position: relative;
+}
+
+@media (max-width: 860px) {
+  .level-meter.vertical {
+    width: 3px;
+    right: 0;
+  }
+
+  .level-meter.horizontal {
+    width: 48px;
+  }
+}
