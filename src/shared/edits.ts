@@ -653,3 +653,45 @@ export function cropRange(t: Timeline, start: number, end: number): Timeline {
     markers: t.markers.filter((m) => m.frame >= s && m.frame < e).map((m) => ({ ...m, frame: m.frame - s })),
   };
 }
+
+// ---- Text-based cuts ----
+
+/**
+ * Cut frame ranges out of the timeline: each range is removed from every
+ * unlocked track and the gaps close, in one edit. Overlapping or touching
+ * ranges merge; they are closed from the right so earlier ones keep their
+ * positions.
+ */
+export function cutRanges(doc: Timeline, ranges: [number, number][]): Timeline {
+  const sorted = ranges
+    .map(([s, e]) => [Math.max(0, Math.round(s)), Math.round(e)] as [number, number])
+    .filter(([s, e]) => e > s)
+    .sort((a, b) => a[0] - b[0]);
+  const merged: [number, number][] = [];
+  for (const [s, e] of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && s <= last[1]) last[1] = Math.max(last[1], e);
+    else merged.push([s, e]);
+  }
+  return merged.reverse().reduce((t, [s, e]) => closeRange(t, s, e), doc);
+}
+
+/** Cut frames [start, end) out of every unlocked track and close the gap. */
+export function cutRange(doc: Timeline, start: number, end: number): Timeline {
+  return cutRanges(doc, [[start, end]]);
+}
+
+/**
+ * Put back `frames` of source that a cut removed at `at`: everything from
+ * `at` on moves right on every unlocked track, and the clips in `ids` (which
+ * end at `at`) play on into the source they had skipped.
+ */
+export function restoreSourceGap(doc: Timeline, at: number, frames: number, ids: string[]): Timeline {
+  const a = Math.round(at);
+  const len = Math.round(frames);
+  const grow = doc.clips.filter((c) => ids.includes(c.id) && clipEnd(c) === a && !findTrack(doc, c.trackId)?.locked);
+  if (len <= 0 || grow.length === 0) return doc;
+  const growIds = new Set(grow.map((c) => c.id));
+  const opened = openRange(doc, a, len);
+  return { ...opened, clips: opened.clips.map((c) => (growIds.has(c.id) ? { ...c, duration: c.duration + len } : c)) };
+}
