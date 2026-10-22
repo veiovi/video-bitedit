@@ -10,7 +10,7 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { isTranscript } from '../shared/captions';
-import { type Comment, type ProjectDoc, RENDER_PRESETS, type RenderPresetId, type ServerInfo, findTimeline, newId, timelineDuration } from '../shared/project';
+import { type Comment, type ProjectDoc, RENDER_PRESETS, type RenderPresetId, type ServerInfo, findTimeline, newId, renderExt, renderRange, timelineDuration } from '../shared/project';
 import { publishRender, pushProject, viewUrl, editUrl } from './cloud';
 import { loadConfig } from './config';
 import { generateIntoProject, openRouterKey } from './imagegen';
@@ -121,7 +121,7 @@ export async function startLocalServer(project: LocalProject, opts: { port?: num
     rendering = rendering.then(async () => {
       const safeTitle =
         `${doc.title || 'video'} ${render.timelineName}`.replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') || 'video';
-      const ext = RENDER_PRESETS[render.preset].audioOnly ? 'mp3' : 'mp4';
+      const ext = renderExt(render.preset);
       const output = path.join(project.exportsDir(), `${safeTitle}-${render.id}.${ext}`);
       project.updateRender(render.id, { status: 'rendering', progress: 0 });
       try {
@@ -131,6 +131,7 @@ export async function startLocalServer(project: LocalProject, opts: { port?: num
           sources: mediaSources(),
           preset: render.preset,
           output,
+          range: render.range,
           onProgress: (progress) => project.updateRender(render.id, { progress }),
         });
         project.updateRender(render.id, { status: 'done', progress: 1, outputPath: output, outputSize: statSync(output).size });
@@ -144,6 +145,7 @@ export async function startLocalServer(project: LocalProject, opts: { port?: num
   async function publishLocalRender(renderId: string) {
     const render = project.renders.find((r) => r.id === renderId);
     if (!render?.outputPath) throw new HttpError(409, 'Render has no output');
+    if (RENDER_PRESETS[render.preset].still) throw new HttpError(409, 'Stills cannot be published');
     const config = loadConfig();
     if (!config) throw new HttpError(409, 'No cloud configured. Run `videdit deploy` first.');
     project.updateRender(renderId, { status: 'uploading' });
@@ -152,6 +154,7 @@ export async function startLocalServer(project: LocalProject, opts: { port?: num
       const watchUrl = await publishRender(project, config, render.outputPath, render.preset, render.timelineId, {
         title: render.publishTitle ?? project.state.doc.title,
         description: render.publishDescription ?? '',
+        range: render.range ?? null,
       });
       project.updateRender(renderId, { status: 'done', watchUrl, publishedAt: Date.now() });
     } catch (err) {
@@ -320,13 +323,28 @@ export async function startLocalServer(project: LocalProject, opts: { port?: num
     }
     if ((p = m('/api/p/:id/renders')) && method === 'POST') {
       checkProject(p[1]);
-      const b = await jsonBody<{ preset: RenderPresetId; timelineId?: string; publish?: boolean; title?: string; description?: string }>(req);
+      const b = await jsonBody<{
+        preset: RenderPresetId;
+        timelineId?: string;
+        publish?: boolean;
+        title?: string;
+        description?: string;
+        range?: unknown;
+      }>(req);
       if (!(b.preset in RENDER_PRESETS)) throw new HttpError(400, 'Unknown preset');
       const doc = project.state.doc;
       const timeline = findTimeline(doc, b.timelineId);
       if (!timeline) throw new HttpError(400, 'Unknown timeline');
       if (timelineDuration(timeline) === 0) throw new HttpError(400, 'The timeline is empty');
+      const still = RENDER_PRESETS[b.preset].still;
+      if (b.publish && still) throw new HttpError(400, 'Stills cannot be published');
       if (b.publish && !loadConfig()) throw new HttpError(409, 'No cloud configured. Run `videdit deploy` first.');
+      let range;
+      try {
+        range = renderRange(b.range, timelineDuration(timeline), still);
+      } catch (err) {
+        throw new HttpError(400, (err as Error).message);
+      }
       const now = Date.now();
       const render: LocalRender = {
         id: newId(),
@@ -344,6 +362,7 @@ export async function startLocalServer(project: LocalProject, opts: { port?: num
         publishedAt: null,
         publishTitle: b.title ?? null,
         publishDescription: b.description ?? null,
+        range,
         createdAt: now,
         updatedAt: now,
         outputPath: null,

@@ -5,6 +5,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import {
   addClip,
+  addMarker,
   addTrack,
   boundaryNear,
   canReplace,
@@ -59,8 +60,11 @@ import { TranscriptRangeMark } from './TranscriptPanel';
 import { Icon } from './Icon';
 import {
   activeTimeline,
+  addRangeMarker,
+  clearMarks,
   copyAttributes,
   copySelection,
+  cutMarkedRange,
   cutSelection,
   deleteSelection,
   detachSelection,
@@ -68,7 +72,9 @@ import {
   duplicateSelection,
   freezeAtPlayhead,
   loopRange,
+  markedRange,
   pasteAttributesToSelection,
+  playMarkedRange,
   pasteClipboard,
   replaceWithAsset,
   rippleScope,
@@ -79,6 +85,7 @@ import {
 } from '../store';
 import { kindOf, uploadFile } from '../upload';
 import { HelpTip } from './Help';
+import { CommentPins, InOutRange, InOutShade, MarkerLayer, RulerCorner } from './RulerMarks';
 
 export const ASSET_MIME = 'application/x-videdit-asset';
 export const TEXT_MIME = 'application/x-videdit-text';
@@ -256,7 +263,7 @@ interface MenuState {
   trackId?: string;
 }
 
-export function TimelineView({ comments }: { comments: { frame: number; id: string }[] }) {
+export function TimelineView({ comments }: { comments: { frame: number; id: string; author?: string; body?: string }[] }) {
   const doc = useEditor((s) => s.doc);
   const timelineId = useEditor((s) => s.timelineId);
   const timeline = activeTimeline({ doc, timelineId });
@@ -300,9 +307,11 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
   /** Tracks the preview cannot be heard from while others are soloed. */
   const silenced = (t: Track) => soloing && !solo.includes(t.id);
   const loop = useEditor((s) => s.loop);
+  const markIn = useEditor((s) => s.markIn);
+  const markOut = useEditor((s) => s.markOut);
 
   const duration = timelineDuration(timeline);
-  const loopSpan = loop ? (loopRange({ doc, timelineId, selection }) ?? { start: 0, end: duration }) : null;
+  const loopSpan = loop ? (loopRange({ doc, timelineId, selection, markIn, markOut }) ?? { start: 0, end: duration }) : null;
   const contentWidth = Math.max((duration + timeline.fps * 20) * px, (scrollRef.current?.clientWidth ?? 1200) - HEADER_W);
   const assetById = useMemo(() => new Map(assets.map((a) => [a.id, a])), [assets]);
   const totalHeight = timeline.tracks.reduce((h, t) => h + rowH(t), 0);
@@ -992,7 +1001,9 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
       <div className="timeline-scroll" ref={scrollRef}>
         <div className="timeline-grid" style={{ width: HEADER_W + contentWidth }}>
           <div className="ruler-row">
-            <div className="corner" style={{ width: HEADER_W }} />
+            <div className="corner" style={{ width: HEADER_W }}>
+              <RulerCorner />
+            </div>
             <div
               className={`ruler ${px > FRAME_TICKS_PX ? 'frames' : ''}`}
               style={{ width: contentWidth }}
@@ -1008,22 +1019,9 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
                   title="Loop: playback repeats this stretch"
                 />
               )}
-              {timeline.markers.map((m) => (
-                <div
-                  key={m.id}
-                  className="marker"
-                  style={{ left: m.frame * px }}
-                  title={`${m.label}: click to jump here${canEdit ? ', double-click to remove' : ''}`}
-                  onPointerDown={(e) => {
-                    e.stopPropagation();
-                    useEditor.getState().seek(m.frame);
-                  }}
-                  onDoubleClick={() => useEditor.getState().applyTimeline((t) => ({ ...t, markers: t.markers.filter((x) => x.id !== m.id) }))}
-                />
-              ))}
-              {comments.map((c) => (
-                <div key={c.id} className="comment-pin" style={{ left: c.frame * px }} />
-              ))}
+              <InOutRange px={px} />
+              <MarkerLayer timeline={timeline} px={px} />
+              <CommentPins comments={comments} px={px} />
             </div>
           </div>
           <div className="tracks-row">
@@ -1238,6 +1236,7 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
                   {hud.text}
                 </div>
               )}
+              <InOutShade px={px} height={totalHeight} />
               <Playhead height={totalHeight} />
             </div>
           </div>
@@ -1307,6 +1306,7 @@ function ClipMenu({ menu, onClose }: { menu: MenuState; onClose: () => void }) {
   const canSplit = picked.some((c) => c.start < s.playhead && s.playhead < clipEnd(c));
   const canFreeze = picked.some((c) => c.kind === 'video' && c.start <= s.playhead && s.playhead < clipEnd(c));
   const allOff = picked.length > 0 && picked.every((c) => c.disabled);
+  const range = markedRange(s);
   const item = (label: string, keys: string, run: () => void, disabled = false) => (
     <button
       role="menuitem"
@@ -1320,9 +1320,19 @@ function ClipMenu({ menu, onClose }: { menu: MenuState; onClose: () => void }) {
       <kbd>{keys}</kbd>
     </button>
   );
+  const rangeItems = range && (
+    <>
+      <hr />
+      {item('Play range', '⇧Space', playMarkedRange)}
+      {item('Lift range', '⇧Z', () => cutMarkedRange('lift'))}
+      {item('Extract range', '⇧X', () => cutMarkedRange('extract'))}
+      {item('Add range marker', '⌥M', addRangeMarker)}
+      {item('Clear in and out', '⌥X', clearMarks)}
+    </>
+  );
   // Keep the menu on screen.
   const left = Math.min(menu.x, window.innerWidth - 230);
-  const top = Math.min(menu.y, window.innerHeight - (menu.onClip ? 440 : 90));
+  const top = Math.min(menu.y, window.innerHeight - (menu.onClip ? 440 : 160) - (range ? 160 : 0));
   return (
     <div className="context-menu" role="menu" style={{ left, top }} onContextMenu={(e) => e.preventDefault()}>
       {menu.onClip ? (
@@ -1342,13 +1352,15 @@ function ClipMenu({ menu, onClose }: { menu: MenuState; onClose: () => void }) {
           <hr />
           {item('Delete', '⌫', () => deleteSelection('auto'))}
           {item('Ripple delete', 'X', () => deleteSelection('ripple'))}
+          {rangeItems}
         </>
       ) : (
         <>
           {item('Paste here', '⌘V', () => pasteClipboard(menu.frame, menu.trackId), !s.clipboard?.length)}
-          {item('Add marker here', 'M', () =>
-            s.applyTimeline((tl) => ({ ...tl, markers: [...tl.markers, { id: newId(), frame: menu.frame, label: `Marker ${tl.markers.length + 1}` }] })),
-          )}
+          {item('Add marker here', 'M', () => s.applyTimeline((tl) => addMarker(tl, { frame: menu.frame })))}
+          {item('Mark in here', 'I', () => s.setMarks(menu.frame, s.markOut !== null && s.markOut <= menu.frame ? null : s.markOut))}
+          {item('Mark out here', 'O', () => s.setMarks(s.markIn !== null && s.markIn > menu.frame ? null : s.markIn, menu.frame + 1))}
+          {rangeItems}
         </>
       )}
     </div>

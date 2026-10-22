@@ -11,6 +11,17 @@ The model lives in `src/shared/project.ts`.
 - **Timeline**: `{ id, name, fps, width, height, background, tracks[], clips[], markers[] }`.
   Tracks are listed top to bottom, and higher video tracks draw over lower
   ones. There can be up to 10 video tracks and 8 audio tracks.
+- **Marker**: `{ id, frame, label, color?, duration? }`. A marker with a
+  `duration` is a range marker covering `[frame, frame + duration)`.
+  `color` is one of `MARKER_COLORS`. Markers belong to the whole timeline:
+  `closeRange` and `openRange` move them when time is removed or added
+  through every unlocked track or through the main track alone, and leave
+  them when a single other track closes or opens. A point marker inside a
+  removed span goes; a range marker loses the overlap, and one spanning an
+  insert point grows. The pure ops are `addMarker`, `updateMarker`,
+  `moveMarker` and `removeMarker`; `chaptersFromMarkers` turns point
+  markers into `0:00 Title` chapter lines (first chapter at 0:00, at least
+  `CHAPTER_MIN_SECONDS` apart and before the end, skipped markers listed).
 - **Clip**: `{ id, kind, trackId, start, duration, assetId?, in?, volume?, muted?, disabled?, fadeIn?, fadeOut?, opacity?, scale?, rotation?, offsetX?, offsetY?, fit?, text?, words?, speed?, freeze? }`.
   All times are integer frames. `in` is the offset into the source, in
   source frames. `speed` (video and audio, 0.25–4, default 1) plays
@@ -101,6 +112,29 @@ The model lives in `src/shared/project.ts`.
     (`loopRange`) or the whole timeline: the player loops the timeline, and
     leaving the selection while playing seeks back to its start (its end when
     playing backwards). The ruler shades the looped stretch.
+  - **In/out range.** I and O set `markIn` and `markOut` in the store (O
+    marks the frame after the playhead, so the range includes it). The
+    range is editor state, not part of the document: `setMarks` keeps it per
+    timeline in `localStorage` (`videdit.range.<project>.<timeline>`), and
+    `markedRange` reads it, clamped to the timeline (an unset in point means
+    the start, an unset out point the end). The ruler shades it with
+    draggable handles that snap like clips (`RulerMarks.tsx`), and the
+    ruler's corner shows its length. ⌥X clears it. ⇧Z lifts it
+    (`liftRange`: split every unlocked track at both ends and remove what is
+    between) and ⇧X extracts it (`extractRange`: lift, then `closeRange`);
+    without a range those keys keep their old meaning (fit, ripple delete).
+    ⇧Space plays it once (`playOnce`; the preview pauses on the out frame),
+    and loop playback repeats it ahead of the selection (`loopRange`).
+  - **Markers.** M adds a point marker at the playhead, ⌥M a range marker
+    over the in/out range or the selection. On the ruler a click jumps, a
+    drag moves (snapping, one undo step through `preview` and
+    `commitFrom`), dragging a range marker's right end resizes it, and a
+    double-click opens a popover to rename, recolour, make a point or
+    delete. The Markers button in the ruler's corner lists them in time
+    order and copies the point markers as YouTube chapters
+    (`chaptersFromMarkers`). Comment pins on the ruler jump to their frame
+    and open the comments panel with the comment highlighted
+    (`highlightComment`).
   - **Timing.** Speed (`setSpeed`, from the inspector) keeps a clip's `in`
     and the footage it plays, so its length scales; on the main track with
     the magnet on, the rest ripples like an end trim, and elsewhere a longer
@@ -169,7 +203,13 @@ already seeked to its in-point, so playback does not hitch at cuts while a new
 media element loads. Rendering ignores premounting. `src/node/render.ts` bundles it once per process and
 renders with `@remotion/renderer` (headless Chrome + FFmpeg). Draft presets
 downscale through `renderMedia({ scale })`, so the layout is identical at
-every size. Caption clips are drawn by `chunkCaptions`. It groups words into
+every size. A render may carry a `range` (frames `[start, end)`), passed to
+`renderMedia` as its inclusive `frameRange`; `renderRange` checks it against
+the timeline on both servers and treats a range covering everything as the
+whole timeline. The `still-png` preset renders the frame at `range.start`
+with `renderStill`. Stills render locally or on a cloud render worker like
+any other job, and cannot be published.
+Caption clips are drawn by `chunkCaptions`. It groups words into
 lines of up to `wordsPerLine` (default four, one for the one-word look),
 balancing longer phrases (5 → 3 + 2). A line breaks after
 punctuation and at pauses of 140 ms or more, rounded to whole frames. It
@@ -222,14 +262,15 @@ one it is talking to. `GET /api/health` reports `mode: 'local' | 'cloud'`.
 | `PUT …/assets/:aid/filmstrip?frames=&every=&width=&height=` | Filmstrip sprite JPEG for a video; returns the asset with `filmstrip` set. The local server makes its own with FFmpeg and ignores it |
 | `GET /m/:id/a/:aid[/thumb\|/peaks\|/transcript\|/filmstrip]` | Media with Range support, and its side files |
 | `GET/POST/PATCH/DELETE /api/p/:id/comments` | Timecoded comments. Anyone with the link may post |
-| `POST /api/p/:id/renders` | Queue a render `{ preset, timelineId, publish?, title?, description? }` |
+| `POST /api/p/:id/renders` | Queue a render `{ preset, timelineId, publish?, title?, description?, range? }`. `range` is `{ start, end }` in frames (end exclusive); a `still-png` render uses `range.start` |
 | `POST /api/p/:id/renders/:rid/publish` | Publish a finished render |
 | `GET /api/w/:rid`, `GET /w/:rid` | Public watch data, plus `versions`: the project's other published timelines for the watch page's switcher (`pickVersions`). The Worker adds `og:` tags to the HTML |
 | `POST /api/worker/claim`, `…/progress`, `…/upload`, `…/complete`, `…/fail` | Render worker protocol |
 | `POST /api/p/:id/push` | Local only: upload the folder to the configured cloud |
 
 **Cloud** (`src/worker/index.ts`): D1 tables `projects`, `assets`, `renders`
-and `comments` (`migrations/`). R2 keys are `p/<project>/a/<asset>/source`,
+and `comments` (`migrations/`). A render's range is stored in
+`range_start` and `range_end` (both NULL for the whole timeline). R2 keys are `p/<project>/a/<asset>/source`,
 `thumb.jpg`, `filmstrip.jpg`, `peaks.json`, `transcript.json` and
 `p/<project>/r/<render>/output.mp4`. The filmstrip's layout is JSON in
 `assets.filmstrip` (migration 0003). Static

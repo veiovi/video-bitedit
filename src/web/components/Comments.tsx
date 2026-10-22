@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { type Comment, formatTimecode } from '../../shared/project';
 import { api } from '../api';
 import { activeTimeline, useEditor } from '../store';
@@ -21,6 +21,15 @@ export function CommentsPanel({ comments, reload }: { comments: Comment[]; reloa
   const [author, setAuthor] = useState(savedAuthor);
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
+  // A comment picked from its pin on the ruler: scroll to it and highlight it for a moment.
+  const highlight = useEditor((s) => s.highlightComment);
+  const listRef = useRef<HTMLUListElement>(null);
+  useEffect(() => {
+    if (!highlight) return;
+    listRef.current?.querySelector(`[data-comment="${CSS.escape(highlight)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    const t = setTimeout(() => useEditor.setState({ highlightComment: null }), 4000);
+    return () => clearTimeout(t);
+  }, [highlight, comments]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -62,9 +71,9 @@ export function CommentsPanel({ comments, reload }: { comments: Comment[]; reloa
           Comment at {formatTimecode(useEditor.getState().playhead, fps)}
         </button>
       </form>
-      <ul className="comment-list">
+      <ul className="comment-list" ref={listRef}>
         {comments.map((c) => (
-          <li key={c.id} className={c.resolved ? 'resolved' : ''}>
+          <li key={c.id} data-comment={c.id} className={`${c.resolved ? 'resolved' : ''} ${highlight === c.id ? 'highlight' : ''}`}>
             <button className="tc" onClick={() => useEditor.getState().seek(c.frame)}>
               {formatTimecode(c.frame, fps)}
             </button>

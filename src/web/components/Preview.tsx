@@ -38,7 +38,15 @@ export function Preview() {
     const onFrame = (e: { detail: { frame: number } }) => {
       const frame = e.detail.frame;
       const s = useEditor.getState();
-      // Looping the selection: leaving it while playing jumps back to its start (or its end, playing backwards).
+      // Play range (⇧Space) stops on the out point's frame.
+      const once = s.playing ? s.playOnce : null;
+      if (once && (frame >= once.end - 1 || frame < once.start)) {
+        player.pause();
+        player.seekTo(once.end - 1);
+        useEditor.setState({ playhead: once.end - 1, playOnce: null });
+        return;
+      }
+      // Looping a range (in/out, or the selection): leaving it while playing jumps back to its start (or its end, playing backwards).
       // The whole timeline loops through the player's own `loop`.
       const range = s.loop && s.playing ? loopRange(s) : null;
       if (range && (frame < range.start || frame >= range.end)) {
@@ -48,7 +56,7 @@ export function Preview() {
       useEditor.setState({ playhead: frame });
     };
     const onPlay = () => useEditor.setState({ playing: true });
-    const onPause = () => useEditor.setState({ playing: false });
+    const onPause = () => useEditor.setState({ playing: false, playOnce: null });
     player.addEventListener('frameupdate', onFrame);
     player.addEventListener('play', onPlay);
     player.addEventListener('pause', onPause);
@@ -107,7 +115,7 @@ export function Preview() {
           </button>
           <button
             className={`loop ${loop ? 'on' : ''}`}
-            title={`Loop playback (⇧L): repeats the selected clips, or the whole timeline. ${loop ? 'On' : 'Off'}`}
+            title={`Loop playback (⇧L): repeats the in/out range, else the selected clips, else the whole timeline. ${loop ? 'On' : 'Off'}`}
             aria-pressed={loop}
             onClick={toggleLoop}
           >

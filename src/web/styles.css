@@ -3412,3 +3412,350 @@ button.help-more:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+/* ---- In/out range, markers and comment pins on the ruler ---- */
+
+/* The in/out range: shaded on the ruler and, faintly, over the tracks. */
+.inout-range {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--accent-soft);
+  border-top: 3px solid var(--accent);
+  pointer-events: none;
+}
+
+.inout-length {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-family: var(--font-lcd);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.inout-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  margin-left: -5px;
+  z-index: 2;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.inout-handle::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 2px;
+  background: var(--accent);
+}
+
+.inout-handle.in::after,
+.inout-handle.out::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  width: 6px;
+  height: 10px;
+  border: 2px solid var(--accent);
+  border-bottom: 0;
+}
+
+.inout-handle.in::after {
+  left: 4px;
+  border-right: 0;
+}
+
+.inout-handle.out::after {
+  right: 4px;
+  border-left: 0;
+}
+
+.inout-shade {
+  position: absolute;
+  top: 0;
+  background: var(--accent-soft);
+  opacity: 0.5;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Markers: a coloured flag (point) or a bar along the ruler's foot (range). Drag to move. */
+.ruler .marker {
+  background: var(--mc, var(--accent));
+  touch-action: none;
+  z-index: 3;
+}
+
+.ruler .marker.range {
+  height: 6px;
+  margin-left: 0;
+  clip-path: none;
+  border-radius: 1px;
+  box-shadow: 0 -1px 0 var(--panel);
+}
+
+.ruler .marker.range::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 2px;
+  height: 14px;
+  background: var(--mc, var(--accent));
+}
+
+.marker-end {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  bottom: -2px;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.marker-readout {
+  position: absolute;
+  bottom: 14px;
+  z-index: 8;
+  transform: translateX(-50%);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--text);
+  color: var(--panel);
+  font-family: var(--font-lcd);
+  font-size: 10px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Comment pins jump to their comment. */
+.ruler .comment-pin {
+  min-height: 0;
+  padding: 0;
+  box-shadow: none;
+  pointer-events: auto;
+  cursor: pointer;
+  z-index: 3;
+}
+
+.ruler .comment-pin:hover {
+  transform: scale(1.3);
+}
+
+.comment-list li.highlight {
+  outline: 2px solid var(--accent);
+  background: var(--accent-soft);
+}
+
+/* The ruler's corner: marker list and in/out readout. */
+.ruler-corner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  padding: 0 6px;
+  overflow: hidden;
+  font-size: 11px;
+}
+
+.ruler-corner .corner-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 0;
+  padding: 1px 6px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.ruler-corner .corner-button.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.marker-glyph {
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+  clip-path: polygon(50% 100%, 0 0, 100% 0);
+}
+
+.inout-readout {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--accent);
+  font-family: var(--font-lcd);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.inout-readout button {
+  min-height: 0;
+  padding: 0 3px;
+  line-height: 1;
+}
+
+@media (max-width: 860px) {
+  .ruler-corner .corner-label {
+    display: none;
+  }
+}
+
+/* Marker popovers: the editor (rename, colour, delete) and the list. */
+.marker-editor,
+.marker-list {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: var(--border-w) solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  font-size: 12px;
+}
+
+.marker-editor {
+  width: 240px;
+}
+
+.marker-colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.marker-colors button {
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  box-shadow: none;
+}
+
+.marker-colors button.none {
+  background: var(--accent);
+}
+
+.marker-colors button.on {
+  border-color: var(--text);
+}
+
+.marker-meta {
+  color: var(--dim);
+  font-family: var(--font-lcd);
+  font-variant-numeric: tabular-nums;
+}
+
+.marker-editor .button-row {
+  display: flex;
+  gap: 6px;
+}
+
+.marker-editor button.danger {
+  color: #e0664f;
+}
+
+.marker-list {
+  width: 320px;
+  max-height: min(420px, 70vh);
+}
+
+.marker-list-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.marker-list ul {
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.marker-list li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.marker-row {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 26px;
+  padding: 2px 6px;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  text-align: left;
+}
+
+.marker-row:hover {
+  background: var(--accent-soft);
+}
+
+.marker-dot {
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.marker-dot.range {
+  width: 14px;
+  height: 6px;
+  border-radius: 1px;
+}
+
+.marker-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.marker-tc {
+  color: var(--dim);
+  font-family: var(--font-lcd);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chapter-note {
+  margin: 0;
+}
+
+/* Export: range readouts and still previews in the render list. */
+.render-range {
+  font-size: 11px;
+}
+
+.still-thumb {
+  display: block;
+  max-width: 100%;
+  max-height: 120px;
+  margin: 4px 0;
+  border: var(--border-w) solid var(--border);
+}

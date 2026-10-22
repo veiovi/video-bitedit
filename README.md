@@ -88,10 +88,17 @@ below.
   which part of a longer clip plays. Desktop files can go straight onto the
   timeline. Box select, select backward and forward ([ ]), Q/W delete
   left/right, ⌘B split, and P/N/` toggle the magnet, snapping and linkage.
-- J/K/L shuttle, frame stepping and markers. ↑/↓ jump between cuts and
-  markers, a click on the timecode takes a typed time (12.5, 1:05, +2), and
-  ⌘-scroll or a pinch zooms around the pointer. Loop playback (⇧L) repeats
-  the selected clips, or the whole timeline.
+- J/K/L shuttle and frame stepping. ↑/↓ jump between cuts and markers, a
+  click on the timecode takes a typed time (12.5, 1:05, +2), and ⌘-scroll or
+  a pinch zooms around the pointer. Loop playback (⇧L) repeats the in/out
+  range, the selected clips, or the whole timeline.
+- An in/out range (I, O) with draggable, snapping ends: lift it (⇧Z),
+  extract it (⇧X), play it once (⇧Space), loop it, or export just that part.
+- Markers: point markers (M) and range markers (⌥M) in eight colours. Drag
+  to move or resize, double-click to rename or delete, list them from the
+  ruler, and copy them as YouTube chapters. They follow ripple edits on the
+  main track.
+- Clickable comment pins on the ruler jump to the comment.
 - Copy, cut, paste at the playhead and duplicate (⌘C/X/V/D), ⌥⇧-drag to drag a
   copy, nudge by a frame (, . or ⌥←/→), turn clips off without deleting them
   (⇧E), and a right-click menu for all of it. Drags show the new position or
@@ -153,7 +160,9 @@ below.
   timecoded comments.
 - Workspace keys you can copy in one click. `videdit key` and unlock links
   (`…/#ws=KEY`) set up another browser or a render machine in one step.
-- A render queue with MP4 (project size), 720p draft and MP3 presets.
+- A render queue with MP4 (project size), 720p draft and MP3 presets, for
+  the whole timeline, the in/out range or a range marker, plus PNG stills of
+  the frame under the playhead.
 - Public watch pages with link previews and a version switcher. A watch page
   links to the view-only timeline, so its source clips are public too.
 - Uploads blank out phone GPS (QuickTime location atoms and JPEG EXIF), so

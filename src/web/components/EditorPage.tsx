@@ -6,15 +6,22 @@ import { readDraft } from '../drafts';
 import { SKINS, applySkin, currentSkin } from '../skins';
 import {
   activeTimeline,
+  addMarkerAtPlayhead,
+  addRangeMarker,
+  clearMarks,
   copyAttributes,
   copySelection,
+  cutMarkedRange,
   cutSelection,
   deleteSelection,
   duplicateSelection,
   freezeAtPlayhead,
+  markInAtPlayhead,
+  markOutAtPlayhead,
   nudgeSelection,
   pasteAttributesToSelection,
   pasteClipboard,
+  playMarkedRange,
   rippleScope,
   seekEdit,
   toggleEnabledSelection,
@@ -310,11 +317,22 @@ function useKeyboard() {
         freezeAtPlayhead();
         return;
       }
+      // ⌥X clears the in and out points; ⌥M adds a range marker. Matched by physical key, since ⌥ changes e.key on a Mac.
+      if (e.altKey && (e.code === 'KeyX' || e.code === 'KeyM')) {
+        e.preventDefault();
+        if (e.code === 'KeyX') clearMarks();
+        else addRangeMarker();
+        return;
+      }
       switch (key) {
         case ' ':
         case 'k':
           e.preventDefault();
           shuttle = 0;
+          if (key === ' ' && e.shiftKey) {
+            playMarkedRange();
+            break;
+          }
           useEditor.setState({ playbackRate: 1 });
           if (key === 'k') player?.pause();
           else player?.toggle();
@@ -366,12 +384,21 @@ function useKeyboard() {
         case 's':
           s.applyTimeline((tl) => splitAt(tl, s.playhead, s.selection.length ? s.selection : undefined));
           break;
+        case 'i':
+          markInAtPlayhead();
+          break;
+        case 'o':
+          markOutAtPlayhead();
+          break;
         case 'x':
-          deleteSelection('ripple');
+          // ⇧X extracts the in/out range when one is set.
+          if (!(e.shiftKey && cutMarkedRange('extract'))) deleteSelection('ripple');
           break;
         case 'z':
-          if (e.shiftKey) zoomToFit();
-          else deleteSelection('lift');
+          // ⇧Z lifts the in/out range when one is set, and otherwise fits the timeline to the window.
+          if (e.shiftKey) {
+            if (!cutMarkedRange('lift')) zoomToFit();
+          } else deleteSelection('lift');
           break;
         case 'delete':
         case 'backspace':
@@ -420,10 +447,7 @@ function useKeyboard() {
           zoomToFit();
           break;
         case 'm':
-          s.applyTimeline((tl) => ({
-            ...tl,
-            markers: [...tl.markers, { id: newId(), frame: s.playhead, label: `Marker ${tl.markers.length + 1}` }],
-          }));
+          addMarkerAtPlayhead();
           break;
         case 'b':
         case 'c':

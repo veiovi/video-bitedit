@@ -2,14 +2,14 @@
 // the same composition the browser preview plays.
 
 import { bundle } from '@remotion/bundler';
-import { renderMedia, selectComposition } from '@remotion/renderer';
+import { renderMedia, renderStill, selectComposition } from '@remotion/renderer';
 import { execFile } from 'node:child_process';
 import { rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { toolPath } from './media';
-import { RENDER_PRESETS, type ProjectDoc, type RenderPresetId, findTimeline } from '../shared/project';
+import { type FrameRange, RENDER_PRESETS, type ProjectDoc, type RenderPresetId, findTimeline } from '../shared/project';
 
 const run = promisify(execFile);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -36,17 +36,30 @@ export interface RenderOptions {
   onProgress?: (progress: number) => void;
   /** Normalise loudness to -14 LUFS (social-platform level) after rendering. Default true. */
   normalize?: boolean;
+  /** Frames [start, end) to render; the whole timeline when unset. A still renders the frame at `start`. */
+  range?: FrameRange | null;
 }
 
-export async function renderTimeline({ doc, timelineId, sources, preset, output, onProgress, normalize = true }: RenderOptions): Promise<void> {
+export async function renderTimeline({ doc, timelineId, sources, preset, output, onProgress, normalize = true, range }: RenderOptions): Promise<void> {
   const timeline = findTimeline(doc, timelineId);
   if (!timeline) throw new Error(`No timeline "${timelineId}"`);
   const url = await serveUrl();
   const inputProps = { timeline, theme: doc.theme, sources };
   const composition = await selectComposition({ serveUrl: url, id: 'Timeline', inputProps });
   const p = RENDER_PRESETS[preset];
+  if (p.still) {
+    const frame = Math.min(Math.max(0, range?.start ?? 0), composition.durationInFrames - 1);
+    await renderStill({ composition, serveUrl: url, inputProps, frame, output, imageFormat: 'png', scale: p.scale, timeoutInMilliseconds: 120_000 });
+    onProgress?.(1);
+    return;
+  }
+  // Remotion's frame range is inclusive at both ends.
+  const frameRange: [number, number] | undefined = range
+    ? [Math.max(0, range.start), Math.min(composition.durationInFrames, range.end) - 1]
+    : undefined;
   let last = -1;
   await renderMedia({
+    frameRange,
     composition,
     serveUrl: url,
     inputProps,

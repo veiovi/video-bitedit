@@ -250,6 +250,28 @@ export interface Marker {
   id: string;
   frame: number;
   label: string;
+  /** One of MARKER_COLORS (hex); the editor's accent colour when unset. */
+  color?: string;
+  /** Frames; a range marker covers [frame, frame + duration). Unset for a point marker. */
+  duration?: number;
+}
+
+/** Colours a marker can take. */
+export const MARKER_COLORS = [
+  { name: 'red', hex: '#d0533f' },
+  { name: 'orange', hex: '#e08a3c' },
+  { name: 'yellow', hex: '#e2c043' },
+  { name: 'green', hex: '#7aa35a' },
+  { name: 'teal', hex: '#4f9e98' },
+  { name: 'blue', hex: '#5a7fc0' },
+  { name: 'purple', hex: '#8e68b0' },
+  { name: 'pink', hex: '#cf7aa0' },
+] as const;
+
+/** A stretch of a timeline, frames [start, end). */
+export interface FrameRange {
+  start: number;
+  end: number;
 }
 
 export interface Timeline {
@@ -329,6 +351,8 @@ export interface RenderRecord {
   publishedAt: number | null;
   publishTitle: string | null;
   publishDescription: string | null;
+  /** The part of the timeline rendered; null or unset for the whole timeline. A still renders the frame at `range.start`. */
+  range?: FrameRange | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -384,7 +408,7 @@ export function aspectLabel(width: number, height: number): string {
 export function pickVersions(videos: (PublishedVideo & { timelineId: string })[]): PublishedVersion[] {
   const latest = new Map<string, PublishedVideo & { timelineId: string }>();
   for (const v of videos) {
-    if (v.preset === 'audio-mp3') continue;
+    if (v.preset === 'audio-mp3' || v.preset === 'still-png') continue;
     const seen = latest.get(v.timelineId);
     if (!seen || v.publishedAt > seen.publishedAt) latest.set(v.timelineId, v);
   }
@@ -409,11 +433,48 @@ export interface Comment {
 }
 
 export const RENDER_PRESETS = {
-  'mp4-1080p': { label: 'MP4 · project size', scale: 1, audioOnly: false },
-  'mp4-720p': { label: 'MP4 · 720p draft', scale: 720 / 1080, audioOnly: false },
-  'audio-mp3': { label: 'Audio only · MP3', scale: 1, audioOnly: true },
+  'mp4-1080p': { label: 'MP4 · project size', scale: 1, audioOnly: false, still: false },
+  'mp4-720p': { label: 'MP4 · 720p draft', scale: 720 / 1080, audioOnly: false, still: false },
+  'audio-mp3': { label: 'Audio only · MP3', scale: 1, audioOnly: true, still: false },
+  /** One frame as a PNG: the frame at the render's `range.start`. */
+  'still-png': { label: 'Still · PNG', scale: 1, audioOnly: false, still: true },
 } as const;
 export type RenderPresetId = keyof typeof RENDER_PRESETS;
+
+/** File extension of a render's output. */
+export function renderExt(preset: RenderPresetId): 'mp4' | 'mp3' | 'png' {
+  const p = RENDER_PRESETS[preset];
+  return p.still ? 'png' : p.audioOnly ? 'mp3' : 'mp4';
+}
+
+/** MIME type of a render's output. */
+export function renderMime(preset: RenderPresetId): string {
+  return { mp4: 'video/mp4', mp3: 'audio/mpeg', png: 'image/png' }[renderExt(preset)];
+}
+
+/**
+ * The range a render request asks for, checked against the timeline's
+ * length: rounded to frames and kept inside the timeline. Returns null for
+ * the whole timeline (no range, or one that covers all of it); throws when
+ * the range is empty or not numbers. A still needs only `start`: its range
+ * is that one frame.
+ */
+export function renderRange(raw: unknown, duration: number, still = false): FrameRange | null {
+  if (raw === null || raw === undefined) return still ? { start: 0, end: Math.min(1, duration) } : null;
+  if (typeof raw !== 'object') throw new Error('The range must be { start, end } in frames');
+  const r = raw as { start?: unknown; end?: unknown };
+  const num = (v: unknown, fallback: number) => (v === undefined || v === null ? fallback : Number(v));
+  const start = Math.max(0, Math.round(num(r.start, 0)));
+  if (!Number.isFinite(start)) throw new Error('The range must be { start, end } in frames');
+  if (still) {
+    if (start >= duration) throw new Error('The still frame is past the end of the timeline');
+    return { start, end: start + 1 };
+  }
+  const end = Math.min(duration, Math.round(num(r.end, duration)));
+  if (!Number.isFinite(end)) throw new Error('The range must be { start, end } in frames');
+  if (end <= start) throw new Error('The range is empty');
+  return start === 0 && end === duration ? null : { start, end };
+}
 
 /** Shape of IDs that clients may choose themselves (asset IDs on push). */
 export const CLIENT_ID_PATTERN = /^[A-Za-z0-9]{8,32}$/;

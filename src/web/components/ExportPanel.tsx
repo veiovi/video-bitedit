@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { RENDER_PRESETS, type RenderPresetId, type RenderRecord, timelineDuration } from '../../shared/project';
+import { type FrameRange, RENDER_PRESETS, type RenderPresetId, type RenderRecord, type Timeline, formatTimecode, timelineDuration } from '../../shared/project';
 import { api, renderUrl } from '../api';
-import { activeTimeline, useEditor } from '../store';
+import { activeTimeline, formatSeconds, markedRange, useEditor } from '../store';
 import { CopyLine, WorkspaceCard, useWorkspace } from './KeyBox';
 import { HelpTip } from './Help';
 
@@ -14,6 +14,20 @@ const STATUS: Record<RenderRecord['status'], string> = {
   done: 'Ready',
   failed: 'Failed',
 };
+
+/** What part of the timeline to export: all of it, the in/out range, or a range marker's span (`marker:<id>`). */
+type RangeChoice = 'all' | 'inout' | `marker:${string}`;
+
+const span = (r: FrameRange, fps: number) => `${formatTimecode(r.start, fps)}–${formatTimecode(r.end, fps)} · ${formatSeconds(r.end - r.start, fps)}`;
+
+function choiceRange(choice: RangeChoice, timeline: Timeline, inout: FrameRange | null): FrameRange | null {
+  if (choice === 'inout') return inout;
+  if (choice.startsWith('marker:')) {
+    const m = timeline.markers.find((x) => `marker:${x.id}` === choice && x.duration);
+    return m ? { start: m.frame, end: Math.min(m.frame + (m.duration ?? 0), timelineDuration(timeline)) } : null;
+  }
+  return null;
+}
 
 function watchLink(r: Render): string | null {
   if (r.watchUrl) return r.watchUrl;
@@ -35,6 +49,15 @@ export function ExportPanel() {
   const [busy, setBusy] = useState(false);
   const local = server?.mode === 'local';
   const workspace = useWorkspace();
+  const markIn = useEditor((s) => s.markIn);
+  const markOut = useEditor((s) => s.markOut);
+  const playhead = useEditor((s) => s.playhead);
+  const inout = markedRange({ doc, timelineId, markIn, markOut });
+  const rangeMarkers = timeline.markers.filter((m) => m.duration);
+  const [choice, setChoice] = useState<RangeChoice>(() => (inout ? 'inout' : 'all'));
+  const range = choiceRange(choice, timeline, inout);
+  // A choice that no longer exists (range cleared, marker deleted) falls back to the whole timeline.
+  const rangeLost = choice !== 'all' && !range;
 
   const load = () => api.listRenders(projectId).then(setRenders).catch(() => undefined);
   const active = renders.some((r) => r.status === 'queued' || r.status === 'rendering' || r.status === 'uploading');
@@ -55,6 +78,7 @@ export function ExportPanel() {
         publish,
         title: title || `${doc.title}${multi ? ` · ${timeline.name}` : ''}`,
         description,
+        range: rangeLost ? null : range,
       });
       await load();
     } catch (err) {
@@ -64,7 +88,22 @@ export function ExportPanel() {
     }
   }
 
+  /** Export still: the frame under the playhead as a PNG, rendered like any other job. */
+  async function exportStill() {
+    setBusy(true);
+    try {
+      const at = Math.min(playhead, Math.max(0, timelineDuration(timeline) - 1));
+      await api.createRender(projectId, 'still-png', { timelineId: timeline.id, publish: false, range: { start: at, end: at + 1 } });
+      await load();
+    } catch (err) {
+      useEditor.getState().setToast((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const empty = timelineDuration(timeline) === 0;
+  const fpsOf = (id: string) => doc.timelines.find((t) => t.id === id)?.fps ?? timeline.fps;
   return (
     <div className="export">
       {canEdit && (
@@ -75,9 +114,25 @@ export function ExportPanel() {
           <label className="field">
             <span>Format</span>
             <select value={preset} onChange={(e) => setPreset(e.target.value as RenderPresetId)}>
-              {Object.entries(RENDER_PRESETS).map(([id, p]) => (
-                <option key={id} value={id}>
-                  {p.label}
+              {Object.entries(RENDER_PRESETS)
+                .filter(([, p]) => !p.still)
+                .map(([id, p]) => (
+                  <option key={id} value={id}>
+                    {p.label}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Range</span>
+            <select value={rangeLost ? 'all' : choice} onChange={(e) => setChoice(e.target.value as RangeChoice)} aria-label="Export range">
+              <option value="all">Whole timeline</option>
+              <option value="inout" disabled={!inout}>
+                {inout ? `In–out · ${span(inout, timeline.fps)}` : 'In–out range (mark with I and O)'}
+              </option>
+              {rangeMarkers.map((m) => (
+                <option key={m.id} value={`marker:${m.id}`}>
+                  {m.label} · {span({ start: m.frame, end: m.frame + (m.duration ?? 0) }, timeline.fps)}
                 </option>
               ))}
             </select>
@@ -101,6 +156,11 @@ export function ExportPanel() {
               title={local && !server?.cloudConfigured ? 'Run `videdit deploy` to enable publishing' : 'Render and publish a public watch page'}
             >
               Render &amp; publish
+            </button>
+          </div>
+          <div className="button-row still-row">
+            <button className="small" disabled={busy || empty} onClick={exportStill} title="Render the frame under the playhead as a PNG">
+              Export still (PNG) at {formatTimecode(playhead, timeline.fps)}
             </button>
           </div>
           {saveState !== 'saved' && <p className="hint">Saving your latest edit first…</p>}
@@ -142,6 +202,18 @@ export function ExportPanel() {
                 <strong>{r.timelineName}</strong>
                 <span className="muted">{RENDER_PRESETS[r.preset]?.label}</span>
               </div>
+              {r.range && (
+                <div className="render-range muted">
+                  {RENDER_PRESETS[r.preset]?.still
+                    ? `Frame at ${formatTimecode(r.range.start, fpsOf(r.timelineId))}`
+                    : `Range ${span(r.range, fpsOf(r.timelineId))}`}
+                </div>
+              )}
+              {r.status === 'done' && RENDER_PRESETS[r.preset]?.still && (
+                <a href={renderUrl(projectId, r.id)} target="_blank" rel="noreferrer">
+                  <img className="still-thumb" src={renderUrl(projectId, r.id)} alt={`Still of ${r.timelineName}`} />
+                </a>
+              )}
               <div className="render-status">
                 {STATUS[r.status]}
                 {(r.status === 'rendering' || r.status === 'uploading') && ` ${Math.round(r.progress * 100)}%`}
@@ -169,7 +241,7 @@ export function ExportPanel() {
                     </button>
                   </>
                 )}
-                {canEdit && r.status === 'done' && !watch && (local ? server?.cloudConfigured : true) && (
+                {canEdit && r.status === 'done' && !watch && !RENDER_PRESETS[r.preset]?.still && (local ? server?.cloudConfigured : true) && (
                   <button
                     className="small"
                     onClick={async () => {

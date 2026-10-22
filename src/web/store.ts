@@ -2,13 +2,16 @@ import type { PlayerRef } from '@remotion/player';
 import { create } from 'zustand';
 import {
   type ClipAttributes,
+  addMarker,
   adjacentEditPoint,
   clipAttributes,
   closeGaps,
   closeRange,
   deleteClips,
   detachAudio,
+  extractRange,
   freezeFrame,
+  liftRange,
   mainTrackId,
   moveClips,
   pasteAttributes,
@@ -19,7 +22,19 @@ import {
   trimToFrame,
   updateTimeline,
 } from '../shared/edits';
-import { type Asset, type Clip, type ProjectDoc, type ServerInfo, type Timeline, clipEnd, newId, timelineDuration, trackAccepts } from '../shared/project';
+import {
+  type Asset,
+  type Clip,
+  type FrameRange,
+  type ProjectDoc,
+  type ServerInfo,
+  type Timeline,
+  clipEnd,
+  formatTimecode,
+  newId,
+  timelineDuration,
+  trackAccepts,
+} from '../shared/project';
 
 const HISTORY_LIMIT = 200;
 const RIPPLE_KEY = 'videdit.ripple';
@@ -95,8 +110,18 @@ export interface EditorState {
   playbackRate: number;
   /** Soloed tracks: while any is soloed, the preview plays only their sound. Kept in this tab, never saved. */
   solo: string[];
-  /** Loop playback: repeat the selected clips, or the whole timeline when nothing is selected. */
+  /** Loop playback: repeat the in/out range, else the selected clips, else the whole timeline. */
   loop: boolean;
+  /**
+   * In and out points (I and O): the in/out range is frames [markIn, markOut).
+   * Either may be unset. Kept per timeline in this browser, never in the document.
+   */
+  markIn: number | null;
+  markOut: number | null;
+  /** Play range (⇧Space): playback stops when it reaches this range's end. */
+  playOnce: FrameRange | null;
+  /** A comment picked from its pin on the ruler, highlighted in the comments panel. */
+  highlightComment: string | null;
 
   load(projectId: string, doc: ProjectDoc, version: number, assets: Asset[], canEdit: boolean): void;
   /** Apply an edit and record it for undo. */
@@ -116,6 +141,8 @@ export interface EditorState {
   seek(frame: number): void;
   setZoom(pxPerFrame: number): void;
   setToast(msg: string | null): void;
+  /** Set the in and out points of the active timeline (null clears one) and remember them in this browser. */
+  setMarks(markIn: number | null, markOut: number | null): void;
 }
 
 export const useEditor = create<EditorState>((set, get) => ({
@@ -148,8 +175,13 @@ export const useEditor = create<EditorState>((set, get) => ({
   playbackRate: 1,
   solo: [],
   loop: false,
+  markIn: null,
+  markOut: null,
+  playOnce: null,
+  highlightComment: null,
 
-  load:(projectId, doc, version, assets, canEdit) =>
+  load: (projectId, doc, version, assets, canEdit) => {
+    const timelineId = doc.timelines.some((t) => t.id === get().timelineId) ? get().timelineId : doc.timelines[0].id;
     set({
       projectId,
       doc,
@@ -159,8 +191,10 @@ export const useEditor = create<EditorState>((set, get) => ({
       past: [],
       future: [],
       saveState: 'saved',
-      timelineId: doc.timelines.some((t) => t.id === get().timelineId) ? get().timelineId : doc.timelines[0].id,
-    }),
+      timelineId,
+      ...readMarks(projectId, timelineId),
+    });
+  },
 
   apply: (fn) => {
     const { doc, past, canEdit } = get();
@@ -177,7 +211,7 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   setTimeline: (id) => {
     get().player?.pause();
-    set({ timelineId: id, selection: [], gap: null, replacing: null, playhead: 0 });
+    set({ timelineId: id, selection: [], gap: null, replacing: null, playhead: 0, playOnce: null, ...readMarks(get().projectId, id) });
   },
 
   preview: (doc) => {
@@ -228,7 +262,34 @@ export const useEditor = create<EditorState>((set, get) => ({
   setZoom: (pxPerFrame) => set({ pxPerFrame: Math.min(40, Math.max(0.05, pxPerFrame)) }),
 
   setToast: (toast) => set({ toast }),
+
+  setMarks: (markIn, markOut) => {
+    const { projectId, timelineId } = get();
+    const round = (f: number | null) => (f === null ? null : Math.max(0, Math.round(f)));
+    const marks = { markIn: round(markIn), markOut: round(markOut) };
+    try {
+      const key = marksKey(projectId, timelineId);
+      if (marks.markIn === null && marks.markOut === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, JSON.stringify(marks));
+    } catch {
+      // Storage unavailable: the marks last for this tab only.
+    }
+    set(marks);
+  },
 }));
+
+const marksKey = (projectId: string, timelineId: string) => `videdit.range.${projectId}.${timelineId}`;
+
+/** The in and out points this browser remembers for a timeline. */
+function readMarks(projectId: string, timelineId: string): { markIn: number | null; markOut: number | null } {
+  try {
+    const raw = JSON.parse(localStorage.getItem(marksKey(projectId, timelineId)) ?? 'null') as { markIn?: unknown; markOut?: unknown } | null;
+    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v) : null);
+    return { markIn: num(raw?.markIn), markOut: num(raw?.markOut) };
+  } catch {
+    return { markIn: null, markOut: null };
+  }
+}
 
 /** Where main-track ripples apply: every unlocked track with linkage on, otherwise the main track alone. */
 export function rippleScope(t: Timeline, linkage: boolean): string | undefined {
@@ -371,18 +432,112 @@ export function toggleSolo(trackId: string) {
   useEditor.setState({ solo: solo.includes(trackId) ? solo.filter((id) => id !== trackId) : [...solo, trackId] });
 }
 
-/** The stretch loop playback repeats: the selected clips, or null for the whole timeline. */
-export function loopRange(state: Pick<EditorState, 'doc' | 'timelineId' | 'selection'>): { start: number; end: number } | null {
+/** The span of the selected clips, or null when nothing is selected. */
+export function selectionSpan(state: Pick<EditorState, 'doc' | 'timelineId' | 'selection'>): FrameRange | null {
   const picked = activeTimeline(state).clips.filter((c) => state.selection.includes(c.id));
   if (picked.length === 0) return null;
   return { start: Math.min(...picked.map((c) => c.start)), end: Math.max(...picked.map(clipEnd)) };
+}
+
+/**
+ * The in/out range, kept inside the timeline: from the in point (or the
+ * start) to the out point (or the end). Null when neither is set or the
+ * range is empty.
+ */
+export function markedRange(state: Pick<EditorState, 'doc' | 'timelineId' | 'markIn' | 'markOut'>): FrameRange | null {
+  if (state.markIn === null && state.markOut === null) return null;
+  const duration = timelineDuration(activeTimeline(state));
+  const start = Math.min(state.markIn ?? 0, duration);
+  const end = Math.min(state.markOut ?? duration, duration);
+  return end > start ? { start, end } : null;
+}
+
+type LoopState = Pick<EditorState, 'doc' | 'timelineId' | 'selection' | 'markIn' | 'markOut'>;
+
+/** The stretch loop playback repeats: the in/out range, else the selected clips, or null for the whole timeline. */
+export function loopRange(state: LoopState): FrameRange | null {
+  return markedRange(state) ?? selectionSpan(state);
 }
 
 export function toggleLoop() {
   const s = useEditor.getState();
   const loop = !s.loop;
   useEditor.setState({ loop });
-  s.setToast(loop ? `Loop on: repeats ${loopRange(s) ? 'the selected clips' : 'the whole timeline'}` : 'Loop off');
+  const what = markedRange(s) ? 'the in/out range' : selectionSpan(s) ? 'the selected clips' : 'the whole timeline';
+  s.setToast(loop ? `Loop on: repeats ${what}` : 'Loop off');
+}
+
+// ---- In/out range ----
+
+/** I: the in point at the playhead. An out point at or before it is cleared. */
+export function markInAtPlayhead() {
+  const s = useEditor.getState();
+  const at = s.playhead;
+  s.setMarks(at, s.markOut !== null && s.markOut <= at ? null : s.markOut);
+}
+
+/** O: the out point after the playhead frame, so the range includes it. An in point after it is cleared. */
+export function markOutAtPlayhead() {
+  const s = useEditor.getState();
+  const end = s.playhead + 1;
+  s.setMarks(s.markIn !== null && s.markIn >= end ? null : s.markIn, end);
+}
+
+export function clearMarks() {
+  const s = useEditor.getState();
+  if (s.markIn === null && s.markOut === null) return;
+  s.setMarks(null, null);
+  s.setToast('In and out points cleared');
+}
+
+/** Lift (⇧Z) or extract (⇧X) the in/out range on every unlocked track. Returns false when no range is set. */
+export function cutMarkedRange(mode: 'lift' | 'extract'): boolean {
+  const s = useEditor.getState();
+  const r = markedRange(s);
+  if (!r) return false;
+  const before = activeTimeline(s);
+  s.applyTimeline((t) => (mode === 'lift' ? liftRange(t, r.start, r.end) : extractRange(t, r.start, r.end)));
+  if (activeTimeline(useEditor.getState()) === before) {
+    s.setToast('Nothing to remove: the range is empty or every track in it is locked');
+    return true;
+  }
+  s.select([]);
+  if (mode === 'extract') s.setMarks(null, null);
+  s.seek(r.start);
+  s.setToast(`${mode === 'lift' ? 'Lifted' : 'Extracted'} ${formatSeconds(r.end - r.start, before.fps)} from ${formatTimecode(r.start, before.fps)}`);
+  return true;
+}
+
+/** Play range (⇧Space): play from the in point to the out point once. */
+export function playMarkedRange() {
+  const s = useEditor.getState();
+  const r = markedRange(s);
+  if (!r) return s.setToast('Mark an in point (I) and an out point (O) first');
+  useEditor.setState({ playOnce: r, playbackRate: 1 });
+  s.player?.seekTo(r.start);
+  useEditor.setState({ playhead: r.start });
+  s.player?.play();
+}
+
+/** "3.40 s" */
+export function formatSeconds(frames: number, fps: number): string {
+  return `${(frames / fps).toFixed(2)} s`;
+}
+
+// ---- Markers ----
+
+/** M: a point marker at the playhead. */
+export function addMarkerAtPlayhead() {
+  const s = useEditor.getState();
+  s.applyTimeline((t) => addMarker(t, { frame: s.playhead }));
+}
+
+/** ⌥M: a range marker over the in/out range, or over the selected clips when no range is set. */
+export function addRangeMarker() {
+  const s = useEditor.getState();
+  const r = markedRange(s) ?? selectionSpan(s);
+  if (!r) return s.setToast('Range marker: mark in and out points (I, O) or select clips first');
+  s.applyTimeline((t) => addMarker(t, { frame: r.start, duration: r.end - r.start }));
 }
 
 /** Main-track ripples while the magnet is on: where they reach, for the pure ops' `rippleMain`/`ripple` options. */

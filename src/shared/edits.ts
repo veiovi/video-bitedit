@@ -10,6 +10,8 @@ import {
   type Effect,
   FORMATS,
   type FormatId,
+  MARKER_COLORS,
+  type Marker,
   type ProjectDoc,
   SPEED_LIMITS,
   TRACK_LIMITS,
@@ -19,6 +21,7 @@ import {
   clipEnd,
   clipSpeed,
   newId,
+  timelineDuration,
   trackAccepts,
   trackColor,
 } from './project';
@@ -322,11 +325,40 @@ export function closeRange(doc: Timeline, start: number, end: number, onlyTrack?
   let clips = doc.clips;
   for (const id of open) clips = carve(clips, id, s, e);
   clips = clips.map((c) => (open.has(c.trackId) && c.start >= e ? { ...c, start: c.start - len } : c));
-  // Markers belong to the whole timeline, so a single-track close leaves them alone.
-  const markers = onlyTrack
-    ? doc.markers
-    : doc.markers.filter((m) => m.frame < s || m.frame >= e).map((m) => (m.frame >= e ? { ...m, frame: m.frame - len } : m));
-  return { ...doc, clips: sortClips(clips), markers };
+  return { ...doc, clips: sortClips(clips), markers: markersFollow(doc, onlyTrack) ? closeMarkers(doc.markers, s, e) : doc.markers };
+}
+
+/**
+ * Markers belong to the whole timeline. They follow a ripple through every
+ * unlocked track or through the main track alone, and stay put when a single
+ * other track closes or opens up.
+ */
+function markersFollow(doc: Timeline, onlyTrack?: string): boolean {
+  return !onlyTrack || onlyTrack === mainTrackId(doc);
+}
+
+/** Markers after frames [s, e) are removed: later ones move left, ones inside go, and range markers lose the overlap. */
+function closeMarkers(markers: Marker[], s: number, e: number): Marker[] {
+  const len = e - s;
+  const map = (x: number) => (x < s ? x : x < e ? s : x - len);
+  const out: Marker[] = [];
+  for (const m of markers) {
+    if (!m.duration) {
+      if (m.frame < s || m.frame >= e) out.push(m.frame >= e ? { ...m, frame: m.frame - len } : m);
+      continue;
+    }
+    const start = map(m.frame);
+    const duration = map(m.frame + m.duration) - start;
+    if (duration > 0) out.push(start === m.frame && duration === m.duration ? m : { ...m, frame: start, duration });
+  }
+  return out;
+}
+
+/** Room opens at `a`: later markers move right, and a range marker spanning `a` grows. */
+function openMarkers(markers: Marker[], a: number, len: number): Marker[] {
+  return markers.map((m) =>
+    m.frame >= a ? { ...m, frame: m.frame + len } : m.duration && m.frame + m.duration > a ? { ...m, duration: m.duration + len } : m,
+  );
 }
 
 /**
@@ -341,7 +373,7 @@ export function openRange(doc: Timeline, at: number, length: number, exceptId?: 
   return {
     ...doc,
     clips: sortClips(doc.clips.map((c) => (open.has(c.trackId) && c.id !== exceptId && c.start >= a ? { ...c, start: c.start + len } : c))),
-    markers: onlyTrack ? doc.markers : doc.markers.map((m) => (m.frame >= a ? { ...m, frame: m.frame + len } : m)),
+    markers: markersFollow(doc, onlyTrack) ? openMarkers(doc.markers, a, len) : doc.markers,
   };
 }
 
@@ -833,7 +865,10 @@ export function snapPoints(doc: Timeline, excludeIds: string[] = []): number[] {
     pts.add(c.start);
     pts.add(clipEnd(c));
   }
-  for (const m of doc.markers) pts.add(m.frame);
+  for (const m of doc.markers) {
+    pts.add(m.frame);
+    if (m.duration) pts.add(m.frame + m.duration);
+  }
   return [...pts];
 }
 
@@ -920,7 +955,158 @@ export function cropRange(t: Timeline, start: number, end: number): Timeline {
   return {
     ...t,
     clips,
-    markers: t.markers.filter((m) => m.frame >= s && m.frame < e).map((m) => ({ ...m, frame: m.frame - s })),
+    markers: t.markers
+      .filter((m) => (m.duration ? m.frame < e && m.frame + m.duration > s : m.frame >= s && m.frame < e))
+      .map((m) => {
+        if (!m.duration) return { ...m, frame: m.frame - s };
+        const start = Math.max(m.frame, s);
+        return { ...m, frame: start - s, duration: Math.min(m.frame + m.duration, e) - start };
+      }),
+  };
+}
+
+// ---- In/out ranges ----
+// A range is frames [start, end) of the timeline, marked with I and O in the
+// editor. Both operations act on every unlocked track; locked tracks keep
+// their clips and timing.
+
+/**
+ * Lift a range: remove what every unlocked track holds in frames
+ * [start, end) and leave a gap. Clips crossing an edge are split there
+ * (hard cuts, caption words kept in sync); markers stay where they are.
+ */
+export function liftRange(doc: Timeline, start: number, end: number): Timeline {
+  const s = Math.max(0, Math.round(start));
+  const e = Math.round(end);
+  if (e <= s) return doc;
+  const open = unlockedTracks(doc);
+  const cut = splitAt(splitAt(doc, s), e);
+  const clips = cut.clips.filter((c) => !(open.has(c.trackId) && c.start >= s && clipEnd(c) <= e));
+  return clips.length === doc.clips.length && cut === doc ? doc : { ...cut, clips };
+}
+
+/**
+ * Extract a range: lift it, then close the gap on every unlocked track so
+ * everything after it moves left. Markers inside the range go and later
+ * ones move with the clips.
+ */
+export function extractRange(doc: Timeline, start: number, end: number): Timeline {
+  const s = Math.max(0, Math.round(start));
+  const e = Math.round(end);
+  if (e <= s || unlockedTracks(doc).size === 0) return doc;
+  return closeRange(liftRange(doc, s, e), s, e);
+}
+
+// ---- Markers ----
+
+const MARKER_LABEL_MAX = 80;
+const markerColor = (c: string | undefined | null) => (c && MARKER_COLORS.some((m) => m.hex === c) ? c : undefined);
+const sortMarkers = (markers: Marker[]) => [...markers].sort((a, b) => a.frame - b.frame);
+
+/**
+ * Add a marker: a point marker, or a range marker when `duration` is given.
+ * The label defaults to "Marker N"; an unknown colour is dropped.
+ */
+export function addMarker(doc: Timeline, marker: { frame: number; label?: string; color?: string; duration?: number; id?: string }): Timeline {
+  const frame = Math.max(0, Math.round(marker.frame));
+  if (!Number.isFinite(frame)) return doc;
+  const duration = marker.duration !== undefined ? Math.round(marker.duration) : 0;
+  const label = (marker.label ?? '').trim().slice(0, MARKER_LABEL_MAX) || `Marker ${doc.markers.length + 1}`;
+  const m: Marker = { id: marker.id ?? newId(), frame, label };
+  const color = markerColor(marker.color);
+  if (color) m.color = color;
+  if (duration > 0) m.duration = duration;
+  return { ...doc, markers: sortMarkers([...doc.markers, m]) };
+}
+
+/**
+ * Rename, recolour or resize a marker. An empty label is ignored, a null
+ * colour clears it, and a duration below one frame makes it a point marker.
+ */
+export function updateMarker(doc: Timeline, id: string, patch: { label?: string; color?: string | null; duration?: number | null }): Timeline {
+  const m = doc.markers.find((x) => x.id === id);
+  if (!m) return doc;
+  const next: Marker = { ...m };
+  if (patch.label !== undefined) {
+    const label = patch.label.trim().slice(0, MARKER_LABEL_MAX);
+    if (label) next.label = label;
+  }
+  if (patch.color !== undefined) {
+    const color = markerColor(patch.color);
+    if (color) next.color = color;
+    else if (patch.color === null) delete next.color;
+  }
+  if (patch.duration !== undefined) {
+    const d = patch.duration === null ? 0 : Math.round(patch.duration);
+    if (d >= 1) next.duration = d;
+    else delete next.duration;
+  }
+  const same = next.label === m.label && next.color === m.color && next.duration === m.duration;
+  return same ? doc : { ...doc, markers: doc.markers.map((x) => (x.id === id ? next : x)) };
+}
+
+/** Move a marker so it starts at `frame` (not before 0); a range marker keeps its length. */
+export function moveMarker(doc: Timeline, id: string, frame: number): Timeline {
+  const m = doc.markers.find((x) => x.id === id);
+  const f = Math.max(0, Math.round(frame));
+  if (!m || !Number.isFinite(f) || f === m.frame) return doc;
+  return { ...doc, markers: sortMarkers(doc.markers.map((x) => (x.id === id ? { ...x, frame: f } : x))) };
+}
+
+export function removeMarker(doc: Timeline, id: string): Timeline {
+  return doc.markers.some((m) => m.id === id) ? { ...doc, markers: doc.markers.filter((m) => m.id !== id) } : doc;
+}
+
+/** Shortest chapter YouTube accepts, in seconds. */
+export const CHAPTER_MIN_SECONDS = 10;
+
+export interface Chapters {
+  /** One "0:00 Title" line per chapter, ready to paste into a video description. */
+  text: string;
+  chapters: { frame: number; label: string }[];
+  /** Point markers left out because they were closer than CHAPTER_MIN_SECONDS to the chapter before (or to the end). */
+  skipped: { frame: number; label: string }[];
+  /** YouTube shows chapters only when there are at least three. */
+  tooFew: boolean;
+}
+
+/** "0:05", "12:30", "1:02:03" (whole seconds, rounded down). */
+export function chapterTime(frame: number, fps: number): string {
+  const t = Math.floor(frame / fps);
+  const h = Math.floor(t / 3600);
+  const m = Math.floor(t / 60) % 60;
+  const sec = String(t % 60).padStart(2, '0');
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+}
+
+/**
+ * Video chapters from a timeline's point markers, in time order. The first
+ * chapter always starts at 0:00: a marker in the first CHAPTER_MIN_SECONDS
+ * moves there, otherwise an "Intro" chapter is added. A marker closer than
+ * that to the chapter before it, or to the end of the timeline, is skipped
+ * and listed in `skipped`. Range markers are not chapters.
+ */
+export function chaptersFromMarkers(doc: Timeline): Chapters {
+  const fps = doc.fps;
+  const min = CHAPTER_MIN_SECONDS * fps;
+  const end = timelineDuration(doc);
+  const points = sortMarkers(doc.markers.filter((m) => !m.duration));
+  const chapters: { frame: number; label: string }[] = [];
+  const skipped: { frame: number; label: string }[] = [];
+  for (const m of points) {
+    if (chapters.length === 0) {
+      chapters.push(m.frame < min ? { frame: 0, label: m.label } : { frame: 0, label: 'Intro' });
+      if (m.frame < min) continue;
+    }
+    const last = chapters[chapters.length - 1];
+    if (m.frame - last.frame < min || (end > 0 && end - m.frame < min)) skipped.push({ frame: m.frame, label: m.label });
+    else chapters.push({ frame: m.frame, label: m.label });
+  }
+  return {
+    text: chapters.map((c) => `${chapterTime(c.frame, fps)} ${c.label}`).join('\n'),
+    chapters,
+    skipped,
+    tooFew: chapters.length < 3,
   };
 }
 
