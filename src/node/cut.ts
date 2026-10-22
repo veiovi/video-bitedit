@@ -3,6 +3,7 @@
 // resolves file names to asset IDs, and places them on tracks.
 
 import { type Transcript, captionClipsFor } from '../shared/captions';
+import { CAPTION_LOOKS, type CaptionPosition, captionY } from '../shared/captionLooks';
 import { addClip, addTrack, cropRange, deriveTimeline } from '../shared/edits';
 import {
   type Clip,
@@ -11,7 +12,11 @@ import {
   type TransitionType,
   FORMATS,
   type FormatId,
+  type KeyframeEase,
+  type KeyframeProp,
+  type Keyframes,
   type ProjectDoc,
+  SPEED_LIMITS,
   TRACK_LIMITS,
   type TextStyle,
   type Timeline,
@@ -20,6 +25,7 @@ import {
   newId,
 } from '../shared/project';
 import { captionStyle, defaultTextStyle } from '../shared/themes';
+import { KEYFRAME_EASES, PROP_LIMITS, animatableProps, normalizeKeys, tidyKeyframes } from '../shared/keyframes';
 import type { LocalAsset } from './local-project';
 
 export interface CutListClip {
@@ -34,8 +40,10 @@ export interface CutListClip {
   /** Source in/out points in seconds. */
   in?: number;
   out?: number;
-  /** Length in seconds (alternative to `out`; required for images and text without `out`). */
+  /** Length in seconds (alternative to `out`; required for images and text without `out`). On the timeline, so with `speed` it plays `duration × speed` seconds of source. */
   duration?: number;
+  /** Video and audio: playback speed, 0.25–4 (default 1). The clip plays `in`→`out` and lasts (out − in) / speed. */
+  speed?: number;
   volume?: number;
   /** Video: turn off the clip's own sound (e.g. when its sound is placed on an audio track separately). */
   muted?: boolean;
@@ -65,6 +73,59 @@ export interface CutListClip {
   transition?: { type: TransitionType; duration?: number };
   /** Snap `in`/`out` to the quietest moment nearby (overrides the timeline and file setting). */
   snap?: boolean;
+  /**
+   * Animation: per property (opacity, scale, offsetX, offsetY, rotation,
+   * volume), keys at `at` seconds from the clip's start. A property with keys
+   * ignores its static value. `ease` shapes the move to the next key: linear
+   * (default), easeIn, easeOut, easeInOut or hold.
+   */
+  keyframes?: Partial<Record<KeyframeProp, CutListKeyframe[]>>;
+}
+
+export interface CutListKeyframe {
+  /** Seconds from the clip's start (timeline time, so speed does not stretch it). */
+  at: number;
+  value: number;
+  ease?: KeyframeEase;
+}
+
+/**
+ * Cut-list keyframes in frames, checked: properties the clip can animate,
+ * keys inside the clip, values in range and known eases. Throws a message
+ * naming the clip on the first problem.
+ */
+export function cutListKeyframes(
+  spec: Partial<Record<string, CutListKeyframe[]>>,
+  clip: Pick<Clip, 'kind' | 'freeze' | 'duration'>,
+  fps: number,
+  where: string,
+): Keyframes | undefined {
+  if (typeof spec !== 'object' || spec === null || Array.isArray(spec)) throw new Error(`${where}: "keyframes" must be an object of property → keys`);
+  const allowed = animatableProps(clip);
+  const eases = KEYFRAME_EASES.map((e) => e.id as string);
+  const out: Keyframes = {};
+  for (const [prop, keys] of Object.entries(spec)) {
+    if (!(allowed as string[]).includes(prop)) {
+      throw new Error(`${where}: a ${clip.kind} clip cannot animate "${prop}"${allowed.length ? ` (use ${allowed.join(', ')})` : ''}`);
+    }
+    if (!Array.isArray(keys)) throw new Error(`${where}: keyframes.${prop} must be a list of { at, value }`);
+    const p = prop as KeyframeProp;
+    const { min, max } = PROP_LIMITS[p];
+    out[p] = normalizeKeys(
+      keys.map((k, i) => {
+        const at = Number(k?.at);
+        const value = Number(k?.value);
+        const frame = Math.round(at * fps);
+        if (!Number.isFinite(at) || at < 0 || frame >= clip.duration) {
+          throw new Error(`${where}: keyframes.${prop}[${i}].at must be seconds inside the clip (0 to ${((clip.duration - 1) / fps).toFixed(2)})`);
+        }
+        if (!Number.isFinite(value) || value < min || value > max) throw new Error(`${where}: keyframes.${prop}[${i}].value must be between ${min} and ${max}`);
+        if (k.ease !== undefined && !eases.includes(k.ease)) throw new Error(`${where}: keyframes.${prop}[${i}].ease must be one of ${eases.join(', ')}`);
+        return { frame, value, ...(k.ease && k.ease !== 'linear' && { ease: k.ease }) };
+      }),
+    );
+  }
+  return tidyKeyframes(out);
 }
 
 /** Captions generated from the transcripts of the clips a timeline uses. */
@@ -73,8 +134,13 @@ export type CaptionsSpec =
   | {
       /** Video track for the caption clips; defaults to the top video track. */
       track?: string;
-      /** Overrides for the theme's caption look, e.g. { "y": 0.6, "highlight": "#00e5ff" }. */
+      /**
+       * Overrides for the theme's caption look, e.g. { "captionLook": "karaoke",
+       * "wordsPerLine": 3, "highlight": "#00e5ff" } (see shared/captionLooks.ts).
+       */
       style?: Partial<TextStyle>;
+      /** Where the lines sit, inside the platform safe area for the frame shape; overrides style.y. */
+      position?: CaptionPosition;
     };
 
 export interface CutList {
@@ -248,10 +314,12 @@ function buildTimeline(
     // A video placed on an audio track becomes an audio clip of its sound.
     const kind: Clip['kind'] = asset ? (asset.kind === 'video' && track.kind === 'audio' ? 'audio' : asset.kind) : item.slide ? 'slide' : 'text';
 
+    const speed = (kind === 'video' || kind === 'audio') && item.speed ? Math.min(SPEED_LIMITS.max, Math.max(SPEED_LIMITS.min, item.speed)) : 1;
     let srcIn = item.in ?? 0;
     const sourceLen = asset?.duration ?? null;
+    // Seconds of source the clip plays.
     let seconds: number;
-    if (item.duration !== undefined) seconds = item.duration;
+    if (item.duration !== undefined) seconds = item.duration * speed;
     else if (item.out !== undefined) seconds = item.out - srcIn;
     else if (sourceLen !== null) seconds = sourceLen - srcIn;
     else seconds = kind === 'text' ? 3 : kind === 'slide' ? 5 : 5;
@@ -275,9 +343,10 @@ function buildTimeline(
       kind,
       trackId: track.id,
       start,
-      duration: Math.max(1, f(seconds)),
+      duration: Math.max(1, f(seconds / speed)),
       assetId: asset?.id,
       in: asset && asset.kind !== 'image' ? f(srcIn) : undefined,
+      speed: speed !== 1 ? speed : undefined,
       volume: item.volume,
       muted: kind === 'video' && item.muted ? true : undefined,
       opacity: item.opacity,
@@ -306,6 +375,7 @@ function buildTimeline(
           }
         : undefined,
     };
+    if (item.keyframes) clip.keyframes = cutListKeyframes(item.keyframes, clip, fps, where);
     const before = doc;
     doc = addClip(doc, clip);
     if (doc === before) throw new Error(`${where}: track ${track.name} cannot hold a ${kind} clip`);
@@ -321,7 +391,19 @@ export function addCaptions(t: Timeline, spec: CaptionsSpec, project: Pick<Proje
     ? videoTracks.find((x) => x.name.toLowerCase() === opts.track!.toLowerCase() || x.id === opts.track)
     : videoTracks[0];
   if (!track) throw new Error(`timeline "${name}": captions need a video track${opts.track ? ` named "${opts.track}"` : ''}`);
-  const style: TextStyle = { ...captionStyle(project, t), ...opts.style, text: '' };
+  const look = opts.style?.captionLook;
+  if (look && !CAPTION_LOOKS.some((l) => l.id === look)) {
+    throw new Error(`timeline "${name}": unknown caption look "${look}" (use ${CAPTION_LOOKS.map((l) => l.id).join(', ')})`);
+  }
+  if (opts.position && !['top', 'middle', 'bottom'].includes(opts.position)) {
+    throw new Error(`timeline "${name}": caption position must be top, middle or bottom`);
+  }
+  const style: TextStyle = {
+    ...captionStyle(project, t),
+    ...opts.style,
+    ...(opts.position && { y: captionY(opts.position, t) }),
+    text: '',
+  };
   let doc: Timeline = { ...t, clips: t.clips.filter((c) => c.kind !== 'caption') };
   const captions = captionClipsFor(doc, ctx.transcripts ?? {}, (range, words) => ({
     id: newId(),

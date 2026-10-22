@@ -1,12 +1,12 @@
 // FFmpeg helpers for local ingest: probe media and make thumbnails. Uses the
 // system ffmpeg/ffprobe when present, otherwise the binaries Remotion ships.
 
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import type { AssetKind } from '../shared/project';
+import { type AssetKind, FILMSTRIP, type Filmstrip, filmstripPlan } from '../shared/project';
 
 const run = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -107,30 +107,77 @@ export async function makeThumbnail(file: string, kind: AssetKind, duration: num
   }
 }
 
-export const PEAKS_PER_SECOND = 50;
-
-/** Waveform peaks: `perSecond` values per second (PEAKS_PER_SECOND for waveforms), each 0..255. */
-export async function computePeaks(file: string, perSecond = PEAKS_PER_SECOND): Promise<number[] | null> {
+/**
+ * A filmstrip sprite for a video: one frame every couple of seconds (see
+ * filmstripPlan), each FILMSTRIP.width pixels wide, side by side in one JPEG.
+ * Frame i shows the source at i × every seconds. Returns null when FFmpeg
+ * cannot read the video.
+ */
+export async function makeFilmstrip(file: string, duration: number | null, out: string): Promise<Filmstrip | null> {
+  if (!duration || duration <= 0) return null;
   ffmpeg ??= findTool('ffmpeg');
-  const rate = perSecond * 40;
+  ffprobe ??= findTool('ffprobe');
+  const { frames, every } = filmstripPlan(duration);
   try {
-    const { stdout } = await run(ffmpeg.bin, ['-v', 'error', '-i', file, '-vn', '-ac', '1', '-ar', String(rate), '-f', 's16le', '-'], {
-      env: ffmpeg.env,
-      encoding: 'buffer',
-      maxBuffer: 1_000_000_000,
+    await run(
+      ffmpeg.bin,
+      ['-y', '-v', 'error', '-i', file, '-an', '-vf', `fps=1/${every},scale=${FILMSTRIP.width}:-2,tile=${frames}x1`, '-frames:v', '1', '-q:v', '5', out],
+      { env: ffmpeg.env, maxBuffer: 10_000_000 },
+    );
+    const { stdout } = await run(ffprobe.bin, ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', out], {
+      env: ffprobe.env,
     });
-    const samples = new Int16Array(stdout.buffer, stdout.byteOffset, Math.floor(stdout.byteLength / 2));
-    const bucket = rate / perSecond;
-    const peaks: number[] = [];
-    for (let i = 0; i < samples.length; i += bucket) {
-      let max = 0;
-      for (let j = i; j < Math.min(i + bucket, samples.length); j++) max = Math.max(max, Math.abs(samples[j]));
-      peaks.push(Math.min(255, Math.round((max / 32768) * 255)));
-    }
-    return peaks;
+    const [w, h] = stdout.trim().split(',').map(Number);
+    if (!(w > 0 && h > 0)) return null;
+    return { frames, every, width: Math.round(w / frames), height: h };
   } catch {
     return null;
   }
+}
+
+export const PEAKS_PER_SECOND = 50;
+
+/**
+ * Waveform peaks: `perSecond` values per second (PEAKS_PER_SECOND for
+ * waveforms), each the loudest sample of any channel in that stretch as
+ * 0..255 of full scale. Decoded at 48 kHz and streamed, so the peaks are true
+ * sample peaks (meters and Normalize rely on that) without holding the whole
+ * file in memory.
+ */
+export async function computePeaks(file: string, perSecond = PEAKS_PER_SECOND): Promise<number[] | null> {
+  ffmpeg ??= findTool('ffmpeg');
+  const rate = 48_000;
+  const channels = 2;
+  const bucket = Math.round(rate / perSecond) * channels;
+  return new Promise((resolve) => {
+    const child = spawn(ffmpeg!.bin, ['-v', 'error', '-i', file, '-vn', '-ac', String(channels), '-ar', String(rate), '-f', 's16le', '-'], {
+      env: ffmpeg!.env,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const peaks: number[] = [];
+    let max = 0;
+    let n = 0;
+    let carry: Buffer | null = null;
+    child.stdout.on('data', (chunk: Buffer) => {
+      const buf = carry ? Buffer.concat([carry, chunk]) : chunk;
+      const whole = buf.length - (buf.length % 2);
+      for (let i = 0; i < whole; i += 2) {
+        const v = Math.abs(buf.readInt16LE(i));
+        if (v > max) max = v;
+        if (++n === bucket) {
+          peaks.push(Math.min(255, Math.round((max / 32768) * 255)));
+          max = 0;
+          n = 0;
+        }
+      }
+      carry = whole < buf.length ? buf.subarray(whole) : null;
+    });
+    child.on('error', () => resolve(null));
+    child.on('close', (code) => {
+      if (n > 0) peaks.push(Math.min(255, Math.round((max / 32768) * 255)));
+      resolve(code === 0 ? peaks : null);
+    });
+  });
 }
 
 /** Mono 16 kHz WAV of a file's audio, the input speech-to-text engines expect. */

@@ -5,7 +5,43 @@
 // range out of whatever was already there.
 
 import { retimeWords } from './captions';
-import { type Clip, FORMATS, type FormatId, type ProjectDoc, TRACK_LIMITS, type Timeline, type Track, type TrackKind, clipEnd, newId, trackAccepts } from './project';
+import { type DuckingOptions, type SpeechRange, duckingKeys } from './ducking';
+import {
+  PROP_LIMITS,
+  animatableProps,
+  cropKeys,
+  hasKeys,
+  keyframesFor,
+  normalizeKeys,
+  retimeKeyframes,
+  scaleKeyframes,
+  tidyKeyframes,
+  valueAt,
+} from './keyframes';
+import {
+  type Clip,
+  type Effect,
+  FORMATS,
+  type Keyframe,
+  type KeyframeEase,
+  type KeyframeProp,
+  type Keyframes,
+  type FormatId,
+  MARKER_COLORS,
+  type Marker,
+  type ProjectDoc,
+  SPEED_LIMITS,
+  TRACK_LIMITS,
+  type Timeline,
+  type Track,
+  type TrackKind,
+  clipEnd,
+  clipSpeed,
+  newId,
+  timelineDuration,
+  trackAccepts,
+  trackColor,
+} from './project';
 
 /** Frames available in a clip's source, or Infinity for images and text. */
 export type SourceLength = (clip: Clip) => number;
@@ -13,16 +49,34 @@ export type SourceLength = (clip: Clip) => number;
 const unlimited: SourceLength = () => Infinity;
 
 /**
- * A clip whose content now begins `delta` frames later (head trimmed) and lasts
- * `duration` frames. Moves the source `in` point and retimes caption words.
+ * A clip whose content now begins `delta` timeline frames later (head trimmed)
+ * and lasts `duration` frames. Moves the source `in` point by `delta × speed`
+ * source frames and retimes caption words and keyframes.
  */
 function reframe(c: Clip, delta: number, duration: number): Clip {
-  return {
+  const out: Clip = {
     ...c,
     duration,
-    in: c.in === undefined ? undefined : c.in + delta,
+    in: c.in === undefined ? undefined : Math.max(0, c.in + Math.round(delta * clipSpeed(c))),
     words: retimeWords(c.words, delta, duration),
   };
+  if (c.keyframes) out.keyframes = retimeKeyframes(c.keyframes, delta, duration);
+  return out;
+}
+
+/** Timeline frames a clip can last from its `in` point before its source runs out. */
+function maxLength(c: Clip, sourceLength: SourceLength): number {
+  const speed = clipSpeed(c);
+  const left = sourceLength(c) - (c.in ?? 0);
+  if (speed === 0 || left === Infinity) return Infinity;
+  return Math.max(1, Math.floor(left / speed + 1e-9));
+}
+
+/** Timeline frames of earlier source a clip can reveal at its head. */
+function maxReveal(c: Clip): number {
+  const speed = clipSpeed(c);
+  if (c.in === undefined || speed === 0) return Infinity;
+  return Math.floor(c.in / speed + 1e-9);
 }
 
 function carve(clips: Clip[], trackId: string, start: number, end: number, exceptId?: string): Clip[] {
@@ -80,15 +134,14 @@ export function trimClip(
   const clip = doc.clips.find((c) => c.id === id);
   if (!clip || findTrack(doc, clip.trackId)?.locked) return doc;
   const f = Math.round(frame);
-  const srcIn = clip.in ?? 0;
   let next: Clip;
   if (edge === 'start') {
-    const earliest = clip.in === undefined ? 0 : Math.max(0, clip.start - srcIn);
+    const earliest = Math.max(0, clip.start - maxReveal(clip));
     const s = Math.min(Math.max(f, earliest), clipEnd(clip) - 1);
     const delta = s - clip.start;
     next = { ...reframe(clip, delta, clip.duration - delta), start: s };
   } else {
-    const maxDuration = sourceLength(clip) - srcIn;
+    const maxDuration = maxLength(clip, sourceLength);
     const e = Math.max(f, clip.start + 1);
     const duration = Math.min(e - clip.start, maxDuration);
     // Shortening drops caption words past the new end.
@@ -218,11 +271,19 @@ export function detachAudio(doc: Timeline, ids: string[]): Timeline {
       duration: clip.duration,
       assetId: clip.assetId,
       in: clip.in ?? 0,
+      ...(clip.speed !== undefined && clip.speed !== 1 && { speed: clip.speed }),
       ...(clip.volume !== undefined && { volume: clip.volume }),
       ...(clip.fadeIn && { fadeIn: clip.fadeIn }),
       ...(clip.fadeOut && { fadeOut: clip.fadeOut }),
+      // Volume keys follow the sound; the picture keeps its own animation.
+      ...(clip.keyframes?.volume?.length && { keyframes: { volume: clip.keyframes.volume.map((k) => ({ ...k })) } }),
     };
-    out = { ...out, clips: sortClips([...out.clips.map((c) => (c.id === id ? { ...c, muted: true } : c)), sound]) };
+    const muted = (c: Clip): Clip => {
+      if (!c.keyframes?.volume) return { ...c, muted: true };
+      const { volume: _moved, ...rest } = c.keyframes;
+      return { ...c, muted: true, keyframes: tidyKeyframes(rest) };
+    };
+    out = { ...out, clips: sortClips([...out.clips.map((c) => (c.id === id ? muted(c) : c)), sound]) };
   }
   return out;
 }
@@ -290,11 +351,40 @@ export function closeRange(doc: Timeline, start: number, end: number, onlyTrack?
   let clips = doc.clips;
   for (const id of open) clips = carve(clips, id, s, e);
   clips = clips.map((c) => (open.has(c.trackId) && c.start >= e ? { ...c, start: c.start - len } : c));
-  // Markers belong to the whole timeline, so a single-track close leaves them alone.
-  const markers = onlyTrack
-    ? doc.markers
-    : doc.markers.filter((m) => m.frame < s || m.frame >= e).map((m) => (m.frame >= e ? { ...m, frame: m.frame - len } : m));
-  return { ...doc, clips: sortClips(clips), markers };
+  return { ...doc, clips: sortClips(clips), markers: markersFollow(doc, onlyTrack) ? closeMarkers(doc.markers, s, e) : doc.markers };
+}
+
+/**
+ * Markers belong to the whole timeline. They follow a ripple through every
+ * unlocked track or through the main track alone, and stay put when a single
+ * other track closes or opens up.
+ */
+function markersFollow(doc: Timeline, onlyTrack?: string): boolean {
+  return !onlyTrack || onlyTrack === mainTrackId(doc);
+}
+
+/** Markers after frames [s, e) are removed: later ones move left, ones inside go, and range markers lose the overlap. */
+function closeMarkers(markers: Marker[], s: number, e: number): Marker[] {
+  const len = e - s;
+  const map = (x: number) => (x < s ? x : x < e ? s : x - len);
+  const out: Marker[] = [];
+  for (const m of markers) {
+    if (!m.duration) {
+      if (m.frame < s || m.frame >= e) out.push(m.frame >= e ? { ...m, frame: m.frame - len } : m);
+      continue;
+    }
+    const start = map(m.frame);
+    const duration = map(m.frame + m.duration) - start;
+    if (duration > 0) out.push(start === m.frame && duration === m.duration ? m : { ...m, frame: start, duration });
+  }
+  return out;
+}
+
+/** Room opens at `a`: later markers move right, and a range marker spanning `a` grows. */
+function openMarkers(markers: Marker[], a: number, len: number): Marker[] {
+  return markers.map((m) =>
+    m.frame >= a ? { ...m, frame: m.frame + len } : m.duration && m.frame + m.duration > a ? { ...m, duration: m.duration + len } : m,
+  );
 }
 
 /**
@@ -309,7 +399,7 @@ export function openRange(doc: Timeline, at: number, length: number, exceptId?: 
   return {
     ...doc,
     clips: sortClips(doc.clips.map((c) => (open.has(c.trackId) && c.id !== exceptId && c.start >= a ? { ...c, start: c.start + len } : c))),
-    markers: onlyTrack ? doc.markers : doc.markers.map((m) => (m.frame >= a ? { ...m, frame: m.frame + len } : m)),
+    markers: markersFollow(doc, onlyTrack) ? openMarkers(doc.markers, a, len) : doc.markers,
   };
 }
 
@@ -335,11 +425,10 @@ export function rippleTrim(
   const clip = doc.clips.find((c) => c.id === id);
   if (!clip || findTrack(doc, clip.trackId)?.locked) return doc;
   const f = Math.round(frame);
-  const srcIn = clip.in ?? 0;
   const withClip = (t: Timeline, fn: (c: Clip) => Clip): Timeline => ({ ...t, clips: t.clips.map((c) => (c.id === id ? fn(c) : c)) });
   if (edge === 'end') {
     const oldEnd = clipEnd(clip);
-    const newEnd = Math.min(Math.max(f, clip.start + 1), clip.start + sourceLength(clip) - srcIn);
+    const newEnd = Math.min(Math.max(f, clip.start + 1), clip.start + maxLength(clip, sourceLength));
     if (newEnd < oldEnd) return closeRange(withClip(doc, (c) => reframe(c, 0, newEnd - c.start)), newEnd, oldEnd, onlyTrack);
     if (newEnd > oldEnd) return withClip(openRange(doc, oldEnd, newEnd - oldEnd, id, onlyTrack), (c) => ({ ...c, duration: newEnd - c.start }));
     return doc;
@@ -352,7 +441,7 @@ export function rippleTrim(
   }
   if (delta < 0) {
     // Reveal earlier content: the clip grows to the right and pushes the rest along.
-    const d = clip.in === undefined ? -delta : Math.min(-delta, srcIn);
+    const d = Math.min(-delta, maxReveal(clip));
     if (d <= 0) return doc;
     return withClip(openRange(doc, clip.start, d, id, onlyTrack), (c) => reframe(c, -d, c.duration + d));
   }
@@ -555,6 +644,382 @@ export function deleteSide(
   return t;
 }
 
+/**
+ * Move the start or end of each clip to `frame`, shortening or (as far as its
+ * source allows) lengthening it. Main-track clips ripple when `rippleMain` is
+ * given (on its `onlyTrack` alone, or every unlocked track); other clips trim
+ * in place and overwrite what a longer clip reaches.
+ */
+export function trimToFrame(
+  doc: Timeline,
+  ids: string[],
+  edge: 'start' | 'end',
+  frame: number,
+  sourceLength: SourceLength = unlimited,
+  rippleMain?: { onlyTrack?: string },
+): Timeline {
+  const main = mainTrackId(doc);
+  let t = doc;
+  for (const id of ids) {
+    const c = t.clips.find((x) => x.id === id);
+    if (!c || (edge === 'start' ? frame >= clipEnd(c) : frame <= c.start)) continue;
+    t = rippleMain && c.trackId === main ? rippleTrim(t, id, edge, frame, sourceLength, rippleMain.onlyTrack) : trimClip(t, id, edge, frame, sourceLength);
+  }
+  return t;
+}
+
+// ---- Speed, freeze frames, roll and slip ----
+
+/**
+ * Set a video or audio clip's speed, kept within SPEED_LIMITS and rounded to
+ * hundredths. The clip keeps its start and `in` point and plays the same
+ * stretch of source, so its length scales by old speed / new speed, limited
+ * by the end of the source. Like trimming its end: with `ripple`, the rest of
+ * the timeline follows (on `ripple.onlyTrack` alone, or every unlocked
+ * track); without it, a longer clip overwrites what follows on its track.
+ */
+export function setSpeed(
+  doc: Timeline,
+  id: string,
+  speed: number,
+  sourceLength: SourceLength = unlimited,
+  ripple?: { onlyTrack?: string },
+): Timeline {
+  const clip = doc.clips.find((c) => c.id === id);
+  if (!clip || (clip.kind !== 'video' && clip.kind !== 'audio') || clip.freeze || !Number.isFinite(speed)) return doc;
+  if (findTrack(doc, clip.trackId)?.locked) return doc;
+  const s = Math.round(Math.min(SPEED_LIMITS.max, Math.max(SPEED_LIMITS.min, speed)) * 100) / 100;
+  const old = clipSpeed(clip);
+  if (s === old) return doc;
+  // Keys stretch with the clip, so the animation spans the same footage.
+  const stretched = Math.max(1, Math.round((clip.duration * old) / s));
+  const retimed: Clip = { ...clip, speed: s === 1 ? undefined : s };
+  const duration = Math.max(1, Math.min(stretched, maxLength(retimed, sourceLength)));
+  if (clip.keyframes) retimed.keyframes = scaleKeyframes(clip.keyframes, old / s, duration);
+  const base = { ...doc, clips: doc.clips.map((c) => (c.id === id ? retimed : c)) };
+  const end = clip.start + duration;
+  const out = ripple ? rippleTrim(base, id, 'end', end, sourceLength, ripple.onlyTrack) : trimClip(base, id, 'end', end, sourceLength);
+  // Keep the fades inside the new length.
+  const c = out.clips.find((x) => x.id === id)!;
+  const fadeIn = Math.min(c.fadeIn ?? 0, c.duration);
+  const fadeOut = Math.min(c.fadeOut ?? 0, c.duration - fadeIn);
+  return fadeIn === (c.fadeIn ?? 0) && fadeOut === (c.fadeOut ?? 0) ? out : updateClip(out, id, { fadeIn, fadeOut });
+}
+
+/**
+ * Hold one frame of a video clip: the source frame showing at timeline
+ * `frame` becomes a still (a silent `freeze` clip) `length` frames long that
+ * starts there, keeping the clip's framing and effects (animated ones as they
+ * stand at that frame: the still holds them). With `insert`, the
+ * clip is split there and everything after it moves right (on
+ * `insert.onlyTrack` alone, or every unlocked track); otherwise the still
+ * overwrites what follows on the track.
+ */
+export function freezeFrame(doc: Timeline, id: string, frame: number, length: number, insert?: { onlyTrack?: string }): Timeline {
+  const clip = doc.clips.find((c) => c.id === id);
+  const f = Math.round(frame);
+  if (!clip || clip.kind !== 'video' || !clip.assetId || findTrack(doc, clip.trackId)?.locked) return doc;
+  if (f < clip.start || f >= clipEnd(clip)) return doc;
+  const look = (prop: 'opacity' | 'scale' | 'rotation' | 'offsetX' | 'offsetY') =>
+    hasKeys(clip, prop) ? { [prop]: valueAt(clip, prop, f - clip.start) } : clip[prop] !== undefined ? { [prop]: clip[prop] } : {};
+  const still: Clip = {
+    id: newId(),
+    kind: 'video',
+    trackId: clip.trackId,
+    start: f,
+    duration: Math.max(1, Math.round(length)),
+    assetId: clip.assetId,
+    in: (clip.in ?? 0) + Math.round((f - clip.start) * clipSpeed(clip)),
+    freeze: true,
+    muted: true,
+    ...(clip.fit && { fit: clip.fit }),
+    ...look('scale'),
+    ...look('rotation'),
+    ...look('offsetX'),
+    ...look('offsetY'),
+    ...look('opacity'),
+    ...(clip.effects?.length && { effects: clip.effects }),
+  };
+  return insert ? insertClip(doc, still, insert.onlyTrack) : addClip(doc, still);
+}
+
+/**
+ * Roll the cut between two touching clips on one track to `frame`: one gets
+ * longer and the other shorter by the same amount, so nothing else moves.
+ * The left clip cannot run past the end of its source, nor the right clip
+ * start before the beginning of its source, and each keeps at least a frame.
+ */
+export function rollEdit(doc: Timeline, leftId: string, rightId: string, frame: number, sourceLength: SourceLength = unlimited): Timeline {
+  const left = doc.clips.find((c) => c.id === leftId);
+  const right = doc.clips.find((c) => c.id === rightId);
+  if (!left || !right || left.trackId !== right.trackId || clipEnd(left) !== right.start) return doc;
+  if (findTrack(doc, left.trackId)?.locked) return doc;
+  const cut = right.start;
+  const lo = Math.max(left.start + 1, cut - maxReveal(right));
+  const hi = Math.min(clipEnd(right) - 1, left.start + maxLength(left, sourceLength));
+  if (lo > hi) return doc;
+  const f = Math.min(Math.max(Math.round(frame), lo), hi);
+  if (f === cut) return doc;
+  const nextLeft = f < cut ? reframe(left, 0, f - left.start) : { ...left, duration: f - left.start };
+  const nextRight = { ...reframe(right, f - cut, clipEnd(right) - f), start: f };
+  return { ...doc, clips: sortClips(doc.clips.map((c) => (c.id === leftId ? nextLeft : c.id === rightId ? nextRight : c))) };
+}
+
+/**
+ * Slip a video or audio clip: play a different part of its source in the same
+ * place and length. `delta` moves the `in` point, in source frames, kept
+ * between the start of the source and the last point that still fills the clip.
+ */
+export function slipClip(doc: Timeline, id: string, delta: number, sourceLength: SourceLength = unlimited): Timeline {
+  const clip = doc.clips.find((c) => c.id === id);
+  if (!clip || clip.in === undefined || (clip.kind !== 'video' && clip.kind !== 'audio')) return doc;
+  if (findTrack(doc, clip.trackId)?.locked) return doc;
+  const span = Math.max(1, Math.round(clip.duration * clipSpeed(clip)));
+  const latest = Math.max(0, sourceLength(clip) - span);
+  const next = Math.min(Math.max(0, clip.in + Math.round(delta)), latest);
+  return next === clip.in ? doc : updateClip(doc, id, { in: next });
+}
+
+// ---- Copying a clip's look ----
+
+/** A clip's look, as Copy attributes takes it: effects, transition, opacity, transform, speed, volume and their keyframes. */
+export interface ClipAttributes {
+  effects?: Effect[];
+  transition?: Clip['transition'];
+  opacity?: number;
+  scale?: number;
+  rotation?: number;
+  offsetX?: number;
+  offsetY?: number;
+  fit?: 'contain' | 'cover';
+  speed?: number;
+  volume?: number;
+  /** Animation of the properties above, in frames from the clip's start. */
+  keyframes?: Keyframes;
+}
+
+/** What Copy attributes takes from a clip. Settings the clip's kind has are copied with their defaults filled in. */
+export function clipAttributes(c: Clip): ClipAttributes {
+  const a: ClipAttributes = {};
+  if (c.effects?.length) a.effects = c.effects.map((fx) => ({ ...fx }));
+  if (c.transition) a.transition = { ...c.transition };
+  if (c.kind !== 'audio') Object.assign(a, { opacity: c.opacity ?? 1, scale: c.scale ?? 1, rotation: c.rotation ?? 0 });
+  if (c.kind === 'video' || c.kind === 'image') Object.assign(a, { offsetX: c.offsetX ?? 0, offsetY: c.offsetY ?? 0, fit: c.fit ?? 'contain' });
+  if ((c.kind === 'video' || c.kind === 'audio') && !c.freeze) Object.assign(a, { speed: c.speed ?? 1, volume: c.volume ?? 1 });
+  const keys = keyframesFor(c, c.keyframes);
+  if (keys) a.keyframes = keys;
+  return a;
+}
+
+/**
+ * Give clips a copied look. Each clip takes the attributes that apply to its
+ * kind. A pasted effect replaces an effect of the same type instead of
+ * stacking a second one; other effects stay. Speed changes length as
+ * `setSpeed` does, rippling main-track clips when `rippleMain` is given.
+ * Keyframes are part of the look: each pasted property takes the copied
+ * keys (cut to the clip's length), or loses its own when the copy had none.
+ * Clips on locked tracks are left alone.
+ */
+export function pasteAttributes(
+  doc: Timeline,
+  ids: string[],
+  attrs: ClipAttributes,
+  sourceLength: SourceLength = unlimited,
+  rippleMain?: { onlyTrack?: string },
+): Timeline {
+  const main = mainTrackId(doc);
+  let t = doc;
+  for (const id of ids) {
+    const c = t.clips.find((x) => x.id === id);
+    if (!c || findTrack(t, c.trackId)?.locked) continue;
+    const media = c.kind === 'video' || c.kind === 'audio';
+    const framed = c.kind === 'video' || c.kind === 'image';
+    const patch: Partial<Clip> = {};
+    if (c.kind !== 'audio') {
+      if (attrs.opacity !== undefined) patch.opacity = attrs.opacity;
+      if (attrs.scale !== undefined) patch.scale = attrs.scale;
+      if (attrs.rotation !== undefined) patch.rotation = attrs.rotation;
+      if (attrs.transition) patch.transition = { ...attrs.transition };
+    }
+    if (framed) {
+      if (attrs.offsetX !== undefined) patch.offsetX = attrs.offsetX;
+      if (attrs.offsetY !== undefined) patch.offsetY = attrs.offsetY;
+      if (attrs.fit) patch.fit = attrs.fit;
+      if (attrs.effects?.length) {
+        const effects = [...(c.effects ?? [])];
+        for (const fx of attrs.effects) {
+          const i = effects.findIndex((e) => e.type === fx.type);
+          if (i >= 0) effects[i] = { ...fx };
+          else effects.push({ ...fx });
+        }
+        patch.effects = effects;
+      }
+    }
+    if (media && !c.freeze && attrs.volume !== undefined) patch.volume = attrs.volume;
+    t = updateClip(t, id, patch);
+    if (media && attrs.speed !== undefined) t = setSpeed(t, id, attrs.speed, sourceLength, rippleMain && c.trackId === main ? rippleMain : undefined);
+    // Keys go on after the speed change, so they keep the timing they were copied with.
+    const now = t.clips.find((x) => x.id === id)!;
+    const pasted = (Object.keys(patch) as (keyof Clip)[]).filter((k): k is KeyframeProp => (animatableProps(now) as string[]).includes(k));
+    if (pasted.length) {
+      const kf: Keyframes = { ...now.keyframes };
+      for (const prop of pasted) {
+        const keys = attrs.keyframes?.[prop];
+        if (keys?.length) kf[prop] = cropKeys(keys, now.duration);
+        else delete kf[prop];
+      }
+      t = updateClip(t, id, { keyframes: tidyKeyframes(kf) });
+    }
+  }
+  return t;
+}
+
+// ---- Keyframes ----
+// Keys sit in frames from the clip's start (0 to duration − 1) and are kept
+// sorted, one per frame. Values are kept in each property's range.
+
+function withKeys(doc: Timeline, id: string, prop: KeyframeProp, fn: (keys: Keyframe[], clip: Clip) => Keyframe[]): Timeline {
+  const clip = doc.clips.find((c) => c.id === id);
+  if (!clip || findTrack(doc, clip.trackId)?.locked || !animatableProps(clip).includes(prop)) return doc;
+  const before = clip.keyframes?.[prop] ?? [];
+  const after = normalizeKeys(fn(before, clip));
+  if (after.length === before.length && after.every((k, i) => sameKey(k, before[i]))) return doc;
+  const kf: Keyframes = { ...clip.keyframes, [prop]: after };
+  return updateClip(doc, id, { keyframes: tidyKeyframes(kf) });
+}
+
+const sameKey = (a: Keyframe, b: Keyframe) => a.frame === b.frame && a.value === b.value && (a.ease ?? 'linear') === (b.ease ?? 'linear') && a.duck === b.duck;
+
+const clampValue = (prop: KeyframeProp, v: number) => Math.min(PROP_LIMITS[prop].max, Math.max(PROP_LIMITS[prop].min, v));
+
+/**
+ * Add a key, or replace the one at that frame. The frame is kept inside the
+ * clip and the value in the property's range. Without `ease`, a replaced key
+ * keeps its ease. A key set by hand is no longer a ducking key.
+ */
+export function setKeyframe(doc: Timeline, id: string, prop: KeyframeProp, frame: number, value: number, ease?: KeyframeEase): Timeline {
+  if (!Number.isFinite(frame) || !Number.isFinite(value)) return doc;
+  return withKeys(doc, id, prop, (keys, clip) => {
+    const f = Math.min(Math.max(0, Math.round(frame)), clip.duration - 1);
+    const old = keys.find((k) => k.frame === f);
+    const e = ease ?? old?.ease;
+    const key: Keyframe = { frame: f, value: clampValue(prop, value), ...(e && e !== 'linear' && { ease: e }) };
+    return [...keys.filter((k) => k.frame !== f), key];
+  });
+}
+
+/** Remove the key at `frame`, if there is one. */
+export function removeKeyframe(doc: Timeline, id: string, prop: KeyframeProp, frame: number): Timeline {
+  return withKeys(doc, id, prop, (keys) => keys.filter((k) => k.frame !== Math.round(frame)));
+}
+
+/** Move the key at `from` to `to` (kept inside the clip); a key already at `to` is replaced. */
+export function moveKeyframe(doc: Timeline, id: string, prop: KeyframeProp, from: number, to: number): Timeline {
+  return withKeys(doc, id, prop, (keys, clip) => {
+    const key = keys.find((k) => k.frame === Math.round(from));
+    if (!key) return keys;
+    const f = Math.min(Math.max(0, Math.round(to)), clip.duration - 1);
+    return [...keys.filter((k) => k !== key && k.frame !== f), { ...key, frame: f }];
+  });
+}
+
+/**
+ * Remove a property's keys (every property's without `prop`). The property
+ * keeps the value it had at `frame` (relative to the clip) as its static value,
+ * so clearing does not make the clip jump.
+ */
+export function clearKeyframes(doc: Timeline, id: string, prop?: KeyframeProp, frame = 0): Timeline {
+  const clip = doc.clips.find((c) => c.id === id);
+  if (!clip?.keyframes || findTrack(doc, clip.trackId)?.locked) return doc;
+  const props = prop ? [prop] : (Object.keys(clip.keyframes) as KeyframeProp[]);
+  const patch: Partial<Clip> = {};
+  const kf: Keyframes = { ...clip.keyframes };
+  for (const p of props) {
+    if (!kf[p]?.length) continue;
+    patch[p] = valueAt(clip, p, frame);
+    delete kf[p];
+  }
+  if (Object.keys(patch).length === 0) return doc;
+  return updateClip(doc, id, { ...patch, keyframes: tidyKeyframes(kf) });
+}
+
+// ---- Ducking and gain ----
+
+/**
+ * Duck clips under speech: write volume keys (tagged as ducking keys) that dip
+ * by `opts.depth` dB around each speech range. The keys replace each clip's
+ * volume keys and stay editable. Clips the speech never reaches keep theirs.
+ */
+export function duckClips(doc: Timeline, ids: string[], speech: SpeechRange[], opts: Partial<DuckingOptions> = {}): Timeline {
+  const music = doc.clips.filter((c) => ids.includes(c.id) && !findTrack(doc, c.trackId)?.locked && animatableProps(c).includes('volume'));
+  const keys = duckingKeys(music, speech, opts);
+  let t = doc;
+  for (const c of music) {
+    const k = keys[c.id];
+    if (k?.length) t = updateClip(t, c.id, { keyframes: tidyKeyframes({ ...c.keyframes, volume: k }) });
+  }
+  return t;
+}
+
+/** Take out the volume keys Duck under speech wrote; keys set by hand stay. */
+export function removeDucking(doc: Timeline, ids: string[]): Timeline {
+  let t = doc;
+  for (const id of ids) t = withKeys(t, id, 'volume', (keys) => keys.filter((k) => !k.duck));
+  return t;
+}
+
+/**
+ * Set a clip's gain, kept between silent and MAX_VOLUME. Volume keys scale by
+ * the same factor (each kept in range), so a ducked or animated clip keeps its
+ * shape around the new level.
+ */
+export function setClipGain(doc: Timeline, id: string, gain: number): Timeline {
+  const clip = doc.clips.find((c) => c.id === id);
+  if (!clip || !Number.isFinite(gain) || findTrack(doc, clip.trackId)?.locked) return doc;
+  const value = Math.round(Math.max(0, Math.min(MAX_VOLUME, gain)) * 1000) / 1000;
+  const old = clip.volume ?? 1;
+  const keys = clip.keyframes?.volume;
+  const factor = old > 0 ? value / old : 1;
+  const patch: Partial<Clip> = { volume: value };
+  if (keys?.length && factor !== 1) {
+    patch.keyframes = { ...clip.keyframes, volume: keys.map((k) => ({ ...k, value: Math.round(clampValue('volume', k.value * factor) * 1000) / 1000 })) };
+  }
+  return updateClip(doc, id, patch);
+}
+
+// ---- Tracks ----
+
+/**
+ * Rename a track (trimmed, up to 24 characters). A track without its own
+ * colour keeps the one it had, since the default colour follows the number
+ * in the name.
+ */
+export function renameTrack(doc: Timeline, trackId: string, name: string): Timeline {
+  const track = findTrack(doc, trackId);
+  const n = name.trim().slice(0, 24);
+  if (!track || !n || n === track.name) return doc;
+  const color = track.color ?? trackColor(track, doc.tracks.filter((t) => t.kind === track.kind).indexOf(track));
+  return updateTrack(doc, trackId, { name: n, color });
+}
+
+/**
+ * Move a track to position `toIndex` (0 = top) among the tracks of its kind.
+ * The bottom video track is always the main track, so moving a track there
+ * makes it main. Locked tracks stay where they are.
+ */
+export function reorderTrack(doc: Timeline, trackId: string, toIndex: number): Timeline {
+  const track = findTrack(doc, trackId);
+  if (!track || track.locked) return doc;
+  const same = doc.tracks.filter((t) => t.kind === track.kind);
+  const from = same.indexOf(track);
+  const to = Math.min(Math.max(0, Math.round(toIndex)), same.length - 1);
+  if (from === to) return doc;
+  const order = same.filter((t) => t !== track);
+  order.splice(to, 0, track);
+  let i = 0;
+  return { ...doc, tracks: doc.tracks.map((t) => (t.kind === track.kind ? order[i++] : t)) };
+}
+
 /** Clip edges and markers near `frame`, for snapping during drags. */
 export function snapPoints(doc: Timeline, excludeIds: string[] = []): number[] {
   const pts = new Set<number>([0]);
@@ -563,7 +1028,10 @@ export function snapPoints(doc: Timeline, excludeIds: string[] = []): number[] {
     pts.add(c.start);
     pts.add(clipEnd(c));
   }
-  for (const m of doc.markers) pts.add(m.frame);
+  for (const m of doc.markers) {
+    pts.add(m.frame);
+    if (m.duration) pts.add(m.frame + m.duration);
+  }
   return [...pts];
 }
 
@@ -650,6 +1118,199 @@ export function cropRange(t: Timeline, start: number, end: number): Timeline {
   return {
     ...t,
     clips,
-    markers: t.markers.filter((m) => m.frame >= s && m.frame < e).map((m) => ({ ...m, frame: m.frame - s })),
+    markers: t.markers
+      .filter((m) => (m.duration ? m.frame < e && m.frame + m.duration > s : m.frame >= s && m.frame < e))
+      .map((m) => {
+        if (!m.duration) return { ...m, frame: m.frame - s };
+        const start = Math.max(m.frame, s);
+        return { ...m, frame: start - s, duration: Math.min(m.frame + m.duration, e) - start };
+      }),
   };
+}
+
+// ---- In/out ranges ----
+// A range is frames [start, end) of the timeline, marked with I and O in the
+// editor. Both operations act on every unlocked track; locked tracks keep
+// their clips and timing.
+
+/**
+ * Lift a range: remove what every unlocked track holds in frames
+ * [start, end) and leave a gap. Clips crossing an edge are split there
+ * (hard cuts, caption words kept in sync); markers stay where they are.
+ */
+export function liftRange(doc: Timeline, start: number, end: number): Timeline {
+  const s = Math.max(0, Math.round(start));
+  const e = Math.round(end);
+  if (e <= s) return doc;
+  const open = unlockedTracks(doc);
+  const cut = splitAt(splitAt(doc, s), e);
+  const clips = cut.clips.filter((c) => !(open.has(c.trackId) && c.start >= s && clipEnd(c) <= e));
+  return clips.length === doc.clips.length && cut === doc ? doc : { ...cut, clips };
+}
+
+/**
+ * Extract a range: lift it, then close the gap on every unlocked track so
+ * everything after it moves left. Markers inside the range go and later
+ * ones move with the clips.
+ */
+export function extractRange(doc: Timeline, start: number, end: number): Timeline {
+  const s = Math.max(0, Math.round(start));
+  const e = Math.round(end);
+  if (e <= s || unlockedTracks(doc).size === 0) return doc;
+  return closeRange(liftRange(doc, s, e), s, e);
+}
+
+// ---- Markers ----
+
+const MARKER_LABEL_MAX = 80;
+const markerColor = (c: string | undefined | null) => (c && MARKER_COLORS.some((m) => m.hex === c) ? c : undefined);
+const sortMarkers = (markers: Marker[]) => [...markers].sort((a, b) => a.frame - b.frame);
+
+/**
+ * Add a marker: a point marker, or a range marker when `duration` is given.
+ * The label defaults to "Marker N"; an unknown colour is dropped.
+ */
+export function addMarker(doc: Timeline, marker: { frame: number; label?: string; color?: string; duration?: number; id?: string }): Timeline {
+  const frame = Math.max(0, Math.round(marker.frame));
+  if (!Number.isFinite(frame)) return doc;
+  const duration = marker.duration !== undefined ? Math.round(marker.duration) : 0;
+  const label = (marker.label ?? '').trim().slice(0, MARKER_LABEL_MAX) || `Marker ${doc.markers.length + 1}`;
+  const m: Marker = { id: marker.id ?? newId(), frame, label };
+  const color = markerColor(marker.color);
+  if (color) m.color = color;
+  if (duration > 0) m.duration = duration;
+  return { ...doc, markers: sortMarkers([...doc.markers, m]) };
+}
+
+/**
+ * Rename, recolour or resize a marker. An empty label is ignored, a null
+ * colour clears it, and a duration below one frame makes it a point marker.
+ */
+export function updateMarker(doc: Timeline, id: string, patch: { label?: string; color?: string | null; duration?: number | null }): Timeline {
+  const m = doc.markers.find((x) => x.id === id);
+  if (!m) return doc;
+  const next: Marker = { ...m };
+  if (patch.label !== undefined) {
+    const label = patch.label.trim().slice(0, MARKER_LABEL_MAX);
+    if (label) next.label = label;
+  }
+  if (patch.color !== undefined) {
+    const color = markerColor(patch.color);
+    if (color) next.color = color;
+    else if (patch.color === null) delete next.color;
+  }
+  if (patch.duration !== undefined) {
+    const d = patch.duration === null ? 0 : Math.round(patch.duration);
+    if (d >= 1) next.duration = d;
+    else delete next.duration;
+  }
+  const same = next.label === m.label && next.color === m.color && next.duration === m.duration;
+  return same ? doc : { ...doc, markers: doc.markers.map((x) => (x.id === id ? next : x)) };
+}
+
+/** Move a marker so it starts at `frame` (not before 0); a range marker keeps its length. */
+export function moveMarker(doc: Timeline, id: string, frame: number): Timeline {
+  const m = doc.markers.find((x) => x.id === id);
+  const f = Math.max(0, Math.round(frame));
+  if (!m || !Number.isFinite(f) || f === m.frame) return doc;
+  return { ...doc, markers: sortMarkers(doc.markers.map((x) => (x.id === id ? { ...x, frame: f } : x))) };
+}
+
+export function removeMarker(doc: Timeline, id: string): Timeline {
+  return doc.markers.some((m) => m.id === id) ? { ...doc, markers: doc.markers.filter((m) => m.id !== id) } : doc;
+}
+
+/** Shortest chapter YouTube accepts, in seconds. */
+export const CHAPTER_MIN_SECONDS = 10;
+
+export interface Chapters {
+  /** One "0:00 Title" line per chapter, ready to paste into a video description. */
+  text: string;
+  chapters: { frame: number; label: string }[];
+  /** Point markers left out because they were closer than CHAPTER_MIN_SECONDS to the chapter before (or to the end). */
+  skipped: { frame: number; label: string }[];
+  /** YouTube shows chapters only when there are at least three. */
+  tooFew: boolean;
+}
+
+/** "0:05", "12:30", "1:02:03" (whole seconds, rounded down). */
+export function chapterTime(frame: number, fps: number): string {
+  const t = Math.floor(frame / fps);
+  const h = Math.floor(t / 3600);
+  const m = Math.floor(t / 60) % 60;
+  const sec = String(t % 60).padStart(2, '0');
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+}
+
+/**
+ * Video chapters from a timeline's point markers, in time order. The first
+ * chapter always starts at 0:00: a marker in the first CHAPTER_MIN_SECONDS
+ * moves there, otherwise an "Intro" chapter is added. A marker closer than
+ * that to the chapter before it, or to the end of the timeline, is skipped
+ * and listed in `skipped`. Range markers are not chapters.
+ */
+export function chaptersFromMarkers(doc: Timeline): Chapters {
+  const fps = doc.fps;
+  const min = CHAPTER_MIN_SECONDS * fps;
+  const end = timelineDuration(doc);
+  const points = sortMarkers(doc.markers.filter((m) => !m.duration));
+  const chapters: { frame: number; label: string }[] = [];
+  const skipped: { frame: number; label: string }[] = [];
+  for (const m of points) {
+    if (chapters.length === 0) {
+      chapters.push(m.frame < min ? { frame: 0, label: m.label } : { frame: 0, label: 'Intro' });
+      if (m.frame < min) continue;
+    }
+    const last = chapters[chapters.length - 1];
+    if (m.frame - last.frame < min || (end > 0 && end - m.frame < min)) skipped.push({ frame: m.frame, label: m.label });
+    else chapters.push({ frame: m.frame, label: m.label });
+  }
+  return {
+    text: chapters.map((c) => `${chapterTime(c.frame, fps)} ${c.label}`).join('\n'),
+    chapters,
+    skipped,
+    tooFew: chapters.length < 3,
+  };
+}
+
+// ---- Text-based cuts ----
+
+/**
+ * Cut frame ranges out of the timeline: each range is removed from every
+ * unlocked track and the gaps close, in one edit. Overlapping or touching
+ * ranges merge; they are closed from the right so earlier ones keep their
+ * positions.
+ */
+export function cutRanges(doc: Timeline, ranges: [number, number][]): Timeline {
+  const sorted = ranges
+    .map(([s, e]) => [Math.max(0, Math.round(s)), Math.round(e)] as [number, number])
+    .filter(([s, e]) => e > s)
+    .sort((a, b) => a[0] - b[0]);
+  const merged: [number, number][] = [];
+  for (const [s, e] of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && s <= last[1]) last[1] = Math.max(last[1], e);
+    else merged.push([s, e]);
+  }
+  return merged.reverse().reduce((t, [s, e]) => closeRange(t, s, e), doc);
+}
+
+/** Cut frames [start, end) out of every unlocked track and close the gap. */
+export function cutRange(doc: Timeline, start: number, end: number): Timeline {
+  return cutRanges(doc, [[start, end]]);
+}
+
+/**
+ * Put back `frames` of source that a cut removed at `at`: everything from
+ * `at` on moves right on every unlocked track, and the clips in `ids` (which
+ * end at `at`) play on into the source they had skipped.
+ */
+export function restoreSourceGap(doc: Timeline, at: number, frames: number, ids: string[]): Timeline {
+  const a = Math.round(at);
+  const len = Math.round(frames);
+  const grow = doc.clips.filter((c) => ids.includes(c.id) && clipEnd(c) === a && !findTrack(doc, c.trackId)?.locked);
+  if (len <= 0 || grow.length === 0) return doc;
+  const growIds = new Set(grow.map((c) => c.id));
+  const opened = openRange(doc, a, len);
+  return { ...opened, clips: opened.clips.map((c) => (growIds.has(c.id) ? { ...c, duration: c.duration + len } : c)) };
 }

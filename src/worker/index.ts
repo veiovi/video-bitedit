@@ -22,8 +22,12 @@ import {
   type RenderRecord,
   emptyDoc,
   findTimeline,
+  isFilmstrip,
   newId,
   pickVersions,
+  renderExt,
+  renderMime,
+  renderRange,
   summariseDoc,
   timelineDuration,
   usedAssetIds,
@@ -133,8 +137,20 @@ interface AssetRow {
   r2_key: string;
   upload_id: string | null;
   has_thumb: number;
+  /** JSON Filmstrip, or NULL (column added in migration 0003). */
+  filmstrip?: string | null;
   status: Asset['status'];
   created_at: number;
+}
+
+function parseFilmstrip(text: string | null | undefined): Asset['filmstrip'] {
+  if (!text) return null;
+  try {
+    const f: unknown = JSON.parse(text);
+    return isFilmstrip(f) ? f : null;
+  } catch {
+    return null;
+  }
 }
 
 function toAsset(r: AssetRow): Asset {
@@ -148,6 +164,7 @@ function toAsset(r: AssetRow): Asset {
     width: r.width,
     height: r.height,
     hasThumb: Boolean(r.has_thumb),
+    filmstrip: parseFilmstrip(r.filmstrip),
     status: r.status,
     createdAt: r.created_at,
   };
@@ -172,6 +189,9 @@ interface RenderRow {
   published_at: number | null;
   publish_title: string | null;
   publish_description: string | null;
+  /** The rendered frames [range_start, range_end); both null for the whole timeline. */
+  range_start: number | null;
+  range_end: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -193,6 +213,7 @@ function toRender(r: RenderRow): RenderRecord {
     publishedAt: r.published_at,
     publishTitle: r.publish_title,
     publishDescription: r.publish_description,
+    range: r.range_start !== null && r.range_end !== null ? { start: r.range_start, end: r.range_end } : null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -207,7 +228,7 @@ async function getRender(env: Env, projectId: string, renderId: string): Promise
 }
 
 function outputExt(preset: RenderPresetId): string {
-  return RENDER_PRESETS[preset].audioOnly ? 'mp3' : 'mp4';
+  return renderExt(preset);
 }
 
 function validateDoc(doc: ProjectDoc) {
@@ -532,6 +553,21 @@ route('PUT', '/api/p/:id/assets/:aid/thumb', async (req, env, [id, aid]) => {
   return json({ ok: true });
 });
 
+// Filmstrip sprite (see shared/project.ts Filmstrip) made by the uploader; its
+// layout comes in the query string: ?frames=&every=&width=&height=.
+route('PUT', '/api/p/:id/assets/:aid/filmstrip', async (req, env, [id, aid], url) => {
+  await requireEdit(req, env, id);
+  const asset = await getAssetRow(env, id, aid);
+  if (asset.kind !== 'video') throw new HttpError(400, 'Only videos have filmstrips');
+  const meta = Object.fromEntries(['frames', 'every', 'width', 'height'].map((k) => [k, Number(url.searchParams.get(k))]));
+  if (!isFilmstrip(meta)) throw new HttpError(400, 'Expected frames, every, width and height');
+  const bytes = await req.arrayBuffer();
+  if (bytes.byteLength > 4_000_000) throw new HttpError(413, 'Filmstrip too large');
+  await env.MEDIA.put(asset.r2_key.replace(/source$/, 'filmstrip.jpg'), bytes, { httpMetadata: { contentType: 'image/jpeg' } });
+  await env.DB.prepare('UPDATE assets SET filmstrip = ? WHERE id = ?').bind(JSON.stringify(meta), aid).run();
+  return json({ asset: toAsset(await getAssetRow(env, id, aid)) });
+});
+
 // AI stills: generate with OpenRouter (default meta/muse-image) and store as an image asset.
 route('POST', '/api/p/:id/generate', async (req, env, [id]) => {
   await requireEdit(req, env, id);
@@ -604,7 +640,7 @@ route('DELETE', '/api/p/:id/assets/:aid', async (req, env, [id, aid]) => {
     await env.MEDIA.resumeMultipartUpload(asset.r2_key, asset.upload_id).abort().catch(() => undefined);
   }
   if (asset.status === 'uploading') {
-    await env.MEDIA.delete(['source', 'thumb.jpg', 'peaks.json', 'transcript.json'].map((f) => asset.r2_key.replace(/source$/, f)));
+    await env.MEDIA.delete(['source', 'thumb.jpg', 'filmstrip.jpg', 'peaks.json', 'transcript.json'].map((f) => asset.r2_key.replace(/source$/, f)));
     await env.DB.prepare('DELETE FROM assets WHERE id = ?').bind(aid).run();
   } else {
     // Hide from the bin but keep the media, so older versions of the timeline still play.
@@ -686,20 +722,29 @@ route('POST', '/api/p/:id/renders', async (req, env, [id]) => {
     title?: string;
     description?: string;
     worker?: string;
+    range?: unknown;
   }>(req, 20_000);
   if (!(body.preset in RENDER_PRESETS)) throw new HttpError(400, 'Unknown preset');
   const doc = JSON.parse(project.doc) as ProjectDoc;
   const timeline = findTimeline(doc, body.timelineId);
   if (!timeline) throw new HttpError(400, 'Unknown timeline');
   if (timelineDuration(timeline) === 0) throw new HttpError(400, 'The timeline is empty');
+  const still = RENDER_PRESETS[body.preset].still;
+  if (body.publish && still) throw new HttpError(400, 'Stills cannot be published');
+  let range;
+  try {
+    range = renderRange(body.range, timelineDuration(timeline), still);
+  } catch (err) {
+    throw new HttpError(400, (err as Error).message);
+  }
   // A workspace client that renders the job itself (`videdit publish`) claims it immediately.
   const selfRender = Boolean(body.worker) && isWorkspace(req, env);
   const now = Date.now();
   const renderId = newId();
   await env.DB.prepare(
     `INSERT INTO renders (id, project_id, timeline_id, timeline_name, preset, doc_version, doc, status, progress, worker,
-                          auto_publish, publish_title, publish_description, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
+                          auto_publish, publish_title, publish_description, range_start, range_end, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       renderId,
@@ -714,6 +759,8 @@ route('POST', '/api/p/:id/renders', async (req, env, [id]) => {
       body.publish ? 1 : 0,
       body.title ? String(body.title).slice(0, 200) : null,
       body.description ? String(body.description).slice(0, 5000) : null,
+      range?.start ?? null,
+      range?.end ?? null,
       now,
       now,
     )
@@ -733,6 +780,7 @@ route('POST', '/api/p/:id/renders/:rid/publish', async (req, env, [id, rid]) => 
   const project = await requireEdit(req, env, id);
   const render = await getRender(env, id, rid);
   if (render.status !== 'done') throw new HttpError(409, 'Only finished renders can be published');
+  if (RENDER_PRESETS[render.preset].still) throw new HttpError(409, 'Stills cannot be published');
   const body = await readJson<{ title?: string; description?: string }>(req, 20_000);
   await env.DB.prepare('UPDATE renders SET published_at = ?, publish_title = ?, publish_description = ?, updated_at = ? WHERE id = ?')
     .bind(
@@ -767,7 +815,7 @@ function publishedVideo(row: RenderRow): PublishedVideo {
     preset: row.preset,
     outputSize: row.output_size,
     publishedAt: row.published_at!,
-    durationFrames: timelineDuration(timeline),
+    durationFrames: row.range_start !== null && row.range_end !== null ? row.range_end - row.range_start : timelineDuration(timeline),
     fps: timeline.fps,
     width: Math.round((timeline.width * scale) / 2) * 2,
     height: Math.round((timeline.height * scale) / 2) * 2,
@@ -849,7 +897,7 @@ route('POST', '/api/worker/renders/:rid/fail', async (req, env, [rid]) => {
 route('POST', '/api/worker/renders/:rid/upload', async (req, env, [rid]) => {
   const row = await workerRender(req, env, rid);
   const key = `p/${row.project_id}/r/${rid}/output.${outputExt(row.preset)}`;
-  const contentType = RENDER_PRESETS[row.preset].audioOnly ? 'audio/mpeg' : 'video/mp4';
+  const contentType = renderMime(row.preset);
   const upload = await env.MEDIA.createMultipartUpload(key, { httpMetadata: { contentType } });
   await env.DB.prepare("UPDATE renders SET status = 'uploading', output_key = ?, upload_id = ?, updated_at = ? WHERE id = ?")
     .bind(key, upload.uploadId, Date.now(), rid)
@@ -894,6 +942,11 @@ route('GET', '/m/:id/a/:aid/thumb', async (req, env, [id, aid]) => {
   return serveObject(req, env, asset.r2_key.replace(/source$/, 'thumb.jpg'));
 });
 
+route('GET', '/m/:id/a/:aid/filmstrip', async (req, env, [id, aid]) => {
+  const asset = await getAssetRow(env, id, aid);
+  return serveObject(req, env, asset.r2_key.replace(/source$/, 'filmstrip.jpg'));
+});
+
 route('GET', '/m/:id/a/:aid/peaks', async (req, env, [id, aid]) => {
   const asset = await getAssetRow(env, id, aid);
   return serveObject(req, env, asset.r2_key.replace(/source$/, 'peaks.json'));
@@ -933,7 +986,7 @@ async function watchPage(req: Request, env: Env, rid: string, url: URL): Promise
     ['og:type', 'video.other'],
     ['og:url', url.href],
     ['og:video', media],
-    ['og:video:type', RENDER_PRESETS[row.preset].audioOnly ? 'audio/mpeg' : 'video/mp4'],
+    ['og:video:type', renderMime(row.preset)],
     ['og:video:width', String(video.width)],
     ['og:video:height', String(video.height)],
   ]

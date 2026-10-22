@@ -1142,7 +1142,7 @@ h3 {
 /* ---------- Timeline ---------- */
 
 .timeline {
-  --header-w: 168px;
+  --header-w: 212px;
 }
 
 .timeline-toolbar {
@@ -2500,7 +2500,7 @@ h3 {
     right: 0;
     bottom: 0;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(6, 1fr);
     gap: 4px;
     padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
     background: var(--panel);
@@ -2689,7 +2689,7 @@ h3 {
 
 @media (max-width: 860px) {
   .mobile-tabs {
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(6, 1fr);
   }
 
   .mobile-tabs button {
@@ -2945,6 +2945,1022 @@ button.help-more:hover:not(:disabled) {
   }
 
   .top-actions .help-btn {
+    display: none;
+  }
+}
+
+/* ---------- Timing edits and track headers ---------- */
+
+/* Frame ticks along the ruler when zoomed in far enough to see single frames. */
+.ruler.frames {
+  background-image: none;
+}
+
+.frame-ticks {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 7px;
+  background-image: linear-gradient(90deg, var(--dim) 0 1px, transparent 1px);
+  background-repeat: repeat-x;
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.badge.speed,
+.badge.freeze {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+/* Each clip carries its track's colour as a stripe on its left edge. */
+.track-lane .clip {
+  border-left: 3px solid var(--tc);
+}
+
+.speed-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  grid-column: 2 / -1;
+}
+
+.speed-presets button {
+  min-width: 40px;
+  padding: 2px 6px;
+}
+
+.track-header {
+  position: relative;
+  touch-action: none;
+}
+
+/* The kind label only shows when the header has room for it beside the name and buttons. */
+.track-header {
+  container-type: inline-size;
+}
+
+.track-header .track-buttons {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+@container (max-width: 260px) {
+  .track-label {
+    display: none;
+  }
+}
+
+.track-header.dragging {
+  opacity: 0.6;
+}
+
+/* The colour swatch is the stripe on the header's left edge. */
+.track-color {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 6px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--tc);
+  cursor: pointer;
+  transition: width 0.1s;
+}
+
+.track-color:hover:not(:disabled),
+.track-color:focus-visible {
+  width: 10px;
+}
+
+.track-badge {
+  /* Names are shortened in the markup, so the badge always shows its whole text. */
+  min-width: max-content;
+  white-space: nowrap;
+  cursor: grab;
+}
+
+.track-header .track-buttons button {
+  padding: 2px;
+}
+
+/* Phones: the narrow header shortens long names further. */
+@media (max-width: 860px) {
+  .track-badge {
+    min-width: 32px;
+    max-width: 44px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+@media (min-width: 861px) {
+  .track-header {
+    column-gap: 5px;
+  }
+}
+
+.track-rename {
+  width: 72px;
+  min-height: 22px !important;
+  padding: 1px 4px !important;
+  font-size: 12px;
+}
+
+.track-drop-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  margin-top: -1px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.track-header.h-small {
+  padding-top: 1px;
+  padding-bottom: 1px;
+}
+
+.track-header.h-small .track-volume,
+.track-header.h-small .track-label {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .track-buttons .track-height {
+    display: none;
+  }
+}
+
+.track-header.h-small .track-buttons button {
+  min-height: 20px;
+  padding: 1px 3px;
+}
+
+.swatch-menu {
+  position: fixed;
+  z-index: 60;
+  display: grid;
+  grid-template-columns: repeat(4, 28px);
+  gap: 6px;
+  padding: 8px;
+  border: var(--border-w) solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+.swatch-menu button {
+  width: 28px;
+  height: 28px;
+  min-height: 0;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+}
+
+.swatch-menu button.on {
+  border-color: var(--text);
+}
+
+/* ---- Filmstrips and skimming ---- */
+
+.clip-frames {
+  overflow: hidden;
+}
+
+.clip-frame {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background-repeat: no-repeat;
+}
+
+.asset-thumb .skim-frame,
+.asset-thumb .skim-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background-repeat: no-repeat;
+  object-fit: cover;
+  pointer-events: none;
+}
+
+.asset-thumb .skim-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: #ffffff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
+@media (hover: none) {
+  .asset-thumb .skim-line,
+  .asset-thumb .skim-frame,
+  .asset-thumb .skim-video {
+    display: none;
+  }
+}
+
+/* ---- Transcript (text-based editing) ---- */
+
+.transcript-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 100%;
+}
+
+.transcript-bar {
+  position: sticky;
+  top: -4px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  background: var(--panel);
+  border-bottom: var(--border-w) solid var(--border);
+}
+
+.transcript-bar .hint {
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.transcript-body {
+  font-size: 14px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+  outline: none;
+  user-select: none;
+}
+
+.transcript-body p {
+  margin: 0 0 12px;
+}
+
+.transcript-body .word {
+  padding: 1px 2px;
+  border-radius: 3px;
+  cursor: text;
+}
+
+.transcript-body .word:hover {
+  background: var(--inset);
+}
+
+.transcript-body .word.now {
+  box-shadow: inset 0 -2px 0 var(--accent);
+  color: var(--text);
+}
+
+.transcript-body .word.sel {
+  background: var(--accent-soft);
+  outline: 1px solid var(--accent);
+}
+
+.transcript-body .cut-run {
+  padding: 1px 2px;
+  color: var(--faint);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--faint) 70%, transparent);
+}
+
+.transcript-body .cut-run.restorable {
+  cursor: pointer;
+}
+
+.transcript-body .cut-run.restorable:hover {
+  color: var(--dim);
+  background: var(--inset);
+}
+
+.transcript-empty {
+  font-size: 13px;
+  color: var(--dim);
+}
+
+.transcript-empty code {
+  font-size: 12px;
+}
+
+.text-range {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  border-inline: 1px solid var(--accent);
+  pointer-events: none;
+}
+
+/* ---- Command palette ---- */
+
+.palette-backdrop {
+  align-items: flex-start;
+  padding-top: min(14vh, 120px);
+}
+
+.palette {
+  display: flex;
+  flex-direction: column;
+  width: min(620px, 100%);
+  max-height: min(70vh, 560px);
+  background: var(--panel);
+  border: var(--border-w) solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.palette-input {
+  width: 100%;
+  padding: 14px 16px;
+  font-size: 16px;
+  border: 0;
+  border-bottom: var(--border-w) solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  outline: none;
+}
+
+.palette-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.palette-item.on {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.palette-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-kind {
+  font-size: 11px;
+  color: var(--faint);
+  text-transform: var(--label-case);
+  letter-spacing: var(--label-spacing);
+}
+
+.palette-item kbd {
+  min-width: 22px;
+  padding: 1px 6px;
+  font-family: 'JetBrains Mono Variable', ui-monospace, monospace;
+  font-size: 11px;
+  text-align: center;
+  color: var(--dim);
+  border: var(--border-w) solid var(--border);
+  border-radius: 3px;
+  background: var(--inset);
+  white-space: nowrap;
+}
+
+.palette-empty {
+  padding: 14px 10px;
+  color: var(--dim);
+}
+
+.palette-foot {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--faint);
+  border-top: var(--border-w) solid var(--border);
+}
+
+.palette-btn {
+  font-family: 'JetBrains Mono Variable', ui-monospace, monospace;
+  font-size: 12px;
+}
+
+@media (max-width: 860px) {
+  .palette-btn {
+    display: none;
+  }
+}
+
+/* ---- Caption looks ---- */
+
+.look-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.look-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 4px;
+  min-width: 0;
+}
+
+.look-tile.on {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.look-preview {
+  position: relative;
+  height: 52px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(160deg, #3a4a52, #1a2226 60%, #2c2420);
+}
+
+.look-name {
+  font-size: 11px;
+  text-align: center;
+}
+
+.seg {
+  display: flex;
+  gap: 4px;
+  grid-column: 2 / -1;
+}
+
+.seg button.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ---- In/out range, markers and comment pins on the ruler ---- */
+
+/* The in/out range: shaded on the ruler and, faintly, over the tracks. */
+.inout-range {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--accent-soft);
+  border-top: 3px solid var(--accent);
+  pointer-events: none;
+}
+
+.inout-length {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-family: var(--font-lcd);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.inout-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  margin-left: -5px;
+  z-index: 2;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.inout-handle::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 2px;
+  background: var(--accent);
+}
+
+.inout-handle.in::after,
+.inout-handle.out::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  width: 6px;
+  height: 10px;
+  border: 2px solid var(--accent);
+  border-bottom: 0;
+}
+
+.inout-handle.in::after {
+  left: 4px;
+  border-right: 0;
+}
+
+.inout-handle.out::after {
+  right: 4px;
+  border-left: 0;
+}
+
+.inout-shade {
+  position: absolute;
+  top: 0;
+  background: var(--accent-soft);
+  opacity: 0.5;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Markers: a coloured flag (point) or a bar along the ruler's foot (range). Drag to move. */
+.ruler .marker {
+  background: var(--mc, var(--accent));
+  touch-action: none;
+  z-index: 3;
+}
+
+.ruler .marker.range {
+  height: 6px;
+  margin-left: 0;
+  clip-path: none;
+  border-radius: 1px;
+  box-shadow: 0 -1px 0 var(--panel);
+}
+
+.ruler .marker.range::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 2px;
+  height: 14px;
+  background: var(--mc, var(--accent));
+}
+
+.marker-end {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  bottom: -2px;
+  width: 8px;
+  cursor: ew-resize;
+}
+
+.marker-readout {
+  position: absolute;
+  bottom: 14px;
+  z-index: 8;
+  transform: translateX(-50%);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--text);
+  color: var(--panel);
+  font-family: var(--font-lcd);
+  font-size: 10px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Comment pins jump to their comment. */
+.ruler .comment-pin {
+  min-height: 0;
+  padding: 0;
+  box-shadow: none;
+  pointer-events: auto;
+  cursor: pointer;
+  z-index: 3;
+}
+
+.ruler .comment-pin:hover {
+  transform: scale(1.3);
+}
+
+.comment-list li.highlight {
+  outline: 2px solid var(--accent);
+  background: var(--accent-soft);
+}
+
+/* The ruler's corner: marker list and in/out readout. */
+.ruler-corner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  padding: 0 6px;
+  overflow: hidden;
+  font-size: 11px;
+}
+
+.ruler-corner .corner-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 0;
+  padding: 1px 6px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.ruler-corner .corner-button.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.marker-glyph {
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+  clip-path: polygon(50% 100%, 0 0, 100% 0);
+}
+
+.inout-readout {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--accent);
+  font-family: var(--font-lcd);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.inout-readout button {
+  min-height: 0;
+  padding: 0 3px;
+  line-height: 1;
+}
+
+@media (max-width: 860px) {
+  .ruler-corner .corner-label {
+    display: none;
+  }
+}
+
+/* Marker popovers: the editor (rename, colour, delete) and the list. */
+.marker-editor,
+.marker-list {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: var(--border-w) solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  font-size: 12px;
+}
+
+.marker-editor {
+  width: 240px;
+}
+
+.marker-colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.marker-colors button {
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  box-shadow: none;
+}
+
+.marker-colors button.none {
+  background: var(--accent);
+}
+
+.marker-colors button.on {
+  border-color: var(--text);
+}
+
+.marker-meta {
+  color: var(--dim);
+  font-family: var(--font-lcd);
+  font-variant-numeric: tabular-nums;
+}
+
+.marker-editor .button-row {
+  display: flex;
+  gap: 6px;
+}
+
+.marker-editor button.danger {
+  color: #e0664f;
+}
+
+.marker-list {
+  width: 320px;
+  max-height: min(420px, 70vh);
+}
+
+.marker-list-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.marker-list ul {
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.marker-list li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.marker-row {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 26px;
+  padding: 2px 6px;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  text-align: left;
+}
+
+.marker-row:hover {
+  background: var(--accent-soft);
+}
+
+.marker-dot {
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.marker-dot.range {
+  width: 14px;
+  height: 6px;
+  border-radius: 1px;
+}
+
+.marker-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.marker-tc {
+  color: var(--dim);
+  font-family: var(--font-lcd);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chapter-note {
+  margin: 0;
+}
+
+/* Export: range readouts and still previews in the render list. */
+.render-range {
+  font-size: 11px;
+}
+
+.still-thumb {
+  display: block;
+  max-width: 100%;
+  max-height: 120px;
+  margin: 4px 0;
+  border: var(--border-w) solid var(--border);
+}
+
+/* ---------- Keyframes, ducking and level meters ---------- */
+
+/* An animatable slider: label, range, readout, then ‹ ◆ › */
+.field.slider.keyable {
+  grid-template-columns: 76px minmax(0, 1fr) auto auto;
+  gap: 6px;
+}
+
+.key-tools {
+  display: flex;
+  align-items: center;
+}
+
+.key-tools button.small {
+  min-width: 18px;
+  min-height: 22px;
+  padding: 0 3px;
+  color: var(--dim);
+  line-height: 1;
+}
+
+.key-tools .key-toggle {
+  font-size: 13px;
+}
+
+.key-tools .key-toggle.keyed {
+  color: var(--text);
+}
+
+.key-tools .key-toggle.on {
+  color: var(--selected);
+}
+
+.field.key-ease {
+  grid-template-columns: 76px minmax(0, 1fr) auto;
+  margin-top: -2px;
+}
+
+.field.key-ease select {
+  font-size: 12px;
+}
+
+/* Keyframe diamonds along the bottom edge of the selected clip. */
+.key-marks {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 12px;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.key-diamond {
+  position: absolute;
+  bottom: 2px;
+  width: 9px;
+  height: 9px;
+  margin-left: -4px;
+  transform: rotate(45deg);
+  border: 1px solid var(--clip-ink, #000);
+  background: var(--selected);
+  cursor: ew-resize;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.key-diamond.k-volume {
+  background: var(--wave, var(--selected));
+}
+
+.key-diamond:hover {
+  transform: rotate(45deg) scale(1.3);
+}
+
+/* The volume curve of an audio clip with volume keyframes, on the volume line's scale. */
+.volume-curve {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 4px;
+  bottom: 4px;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.volume-curve svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.volume-curve polyline {
+  fill: none;
+  stroke: var(--clip-ink, currentColor);
+  stroke-width: 1.5px;
+  opacity: 0.85;
+}
+
+.ducking .field.slider {
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+}
+
+.duck-menu {
+  position: fixed;
+  z-index: 60;
+  width: 280px;
+  padding: 10px;
+  border: var(--border-w) solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  font-size: 12px;
+}
+
+/* Level meters: the bar is the whole scale, cut off at the level (see Meter.tsx). */
+.level-meter {
+  position: relative;
+  flex-shrink: 0;
+  overflow: hidden;
+  background: var(--inset);
+  border: var(--border-w) solid var(--border);
+}
+
+.level-meter.vertical {
+  position: absolute;
+  right: 1px;
+  top: 4px;
+  bottom: 4px;
+  width: 5px;
+}
+
+.level-meter.horizontal {
+  width: 96px;
+  height: 8px;
+}
+
+.level-bar {
+  position: absolute;
+  inset: 0;
+  clip-path: inset(100% 0 0 0);
+  background: linear-gradient(to top, #3fae5a 0%, #3fae5a 72%, #d9b23a 80%, #d9b23a 90.5%, #e5484d 91%);
+}
+
+.level-meter.horizontal .level-bar {
+  clip-path: inset(0 100% 0 0);
+  background: linear-gradient(to right, #3fae5a 0%, #3fae5a 72%, #d9b23a 80%, #d9b23a 90.5%, #e5484d 91%);
+}
+
+.level-hold {
+  position: absolute;
+  visibility: hidden;
+  background: var(--text);
+}
+
+.level-hold.over {
+  background: #e5484d;
+}
+
+.level-meter.vertical .level-hold {
+  left: 0;
+  right: 0;
+  height: 1px;
+}
+
+.level-meter.horizontal .level-hold {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
+.level-zero {
+  position: absolute;
+  opacity: 0.35;
+  background: var(--text);
+}
+
+.level-meter.vertical .level-zero {
+  left: 0;
+  right: 0;
+  height: 1px;
+}
+
+.level-meter.horizontal .level-zero {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
+.track-header.audio {
+  position: relative;
+}
+
+@media (max-width: 860px) {
+  .level-meter.vertical {
+    width: 3px;
+    right: 0;
+  }
+
+  /* The phone transport has no room for it, like the preview volume. */
+  .level-meter.horizontal {
     display: none;
   }
 }

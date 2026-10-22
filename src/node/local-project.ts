@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync,
 import path from 'node:path';
 import type { Transcript } from '../shared/captions';
 import { type Asset, type Comment, type ProjectDoc, type RenderRecord, emptyDoc, newId, HISTORY, type HistoryEntry, summariseDoc, usedAssetIds } from '../shared/project';
-import { computePeaks, makeThumbnail, mediaKind, mimeFor, probeMedia } from './media';
+import { computePeaks, makeFilmstrip, makeThumbnail, mediaKind, mimeFor, probeMedia } from './media';
 
 export const PROJECT_FILE = 'videdit.json';
 const SKIP_DIRS = new Set(['.videdit', 'exports', 'node_modules', '.git']);
@@ -209,6 +209,42 @@ export class LocalProject {
     return path.join(this.dir, '.videdit', 'thumbs', `${assetId}.peaks.json`);
   }
 
+  filmstripFile(assetId: string): string {
+    return path.join(this.dir, '.videdit', 'thumbs', `${assetId}.filmstrip.jpg`);
+  }
+
+  private filmstripJobs = new Map<string, Promise<void>>();
+
+  /**
+   * Make the filmstrip sprite for a video imported before filmstrips existed
+   * (once, even when asked twice at once) and record it on the asset.
+   */
+  ensureFilmstrip(asset: LocalAsset): Promise<void> {
+    const source = this.assetFile(asset);
+    if (asset.kind !== 'video' || asset.filmstrip !== undefined || !existsSync(source)) return Promise.resolve();
+    let job = this.filmstripJobs.get(asset.id);
+    if (!job) {
+      job = makeFilmstrip(source, asset.duration, this.filmstripFile(asset.id))
+        .then((filmstrip) => {
+          this.read();
+          const a = this.data.assets.find((x) => x.id === asset.id);
+          if (!a) return;
+          // null records a video FFmpeg could not sample, so it is not retried every time.
+          a.filmstrip = filmstrip;
+          this.write();
+        })
+        .finally(() => this.filmstripJobs.delete(asset.id));
+      this.filmstripJobs.set(asset.id, job);
+    }
+    return job;
+  }
+
+  /** Make missing filmstrips one after another; editors see them the next time they load the project. */
+  backfillFilmstrips(): Promise<void> {
+    const missing = this.state.assets.filter((a) => a.kind === 'video' && a.status !== 'deleted' && a.filmstrip === undefined);
+    return missing.reduce((chain, a) => chain.then(() => this.ensureFilmstrip(a)), Promise.resolve());
+  }
+
   private peaksJobs = new Map<string, Promise<void>>();
 
   /** Make the waveform for a video or audio file imported before it had one (once, even when asked twice at once). */
@@ -258,6 +294,7 @@ export class LocalProject {
     if (!probe) return null;
     const id = opts.id ?? newId();
     const hasThumb = await makeThumbnail(absPath, probe.kind, probe.duration, this.thumbFile(id));
+    const filmstrip = probe.kind === 'video' ? await makeFilmstrip(absPath, probe.duration, this.filmstripFile(id)) : undefined;
     // Video waveforms show under the filmstrip; an empty list marks a file with no sound.
     if (probe.kind !== 'image') writeFileSync(this.peaksFile(id), JSON.stringify((await computePeaks(absPath)) ?? []));
     const asset: LocalAsset = {
@@ -270,6 +307,7 @@ export class LocalProject {
       width: probe.width,
       height: probe.height,
       hasThumb,
+      ...(filmstrip !== undefined && { filmstrip }),
       status: 'ready',
       createdAt: Date.now(),
       path: rel,

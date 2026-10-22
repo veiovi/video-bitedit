@@ -6,6 +6,7 @@ import { api, mediaUrl, thumbUrl } from '../api';
 import { activeTimeline, useEditor } from '../store';
 import { uploadFile } from '../upload';
 import { Icon } from './Icon';
+import { SkimThumb } from './Filmstrip';
 import { ASSET_MIME, TEXT_MIME, assetKindMime, clipFor } from './TimelineView';
 import { HelpTip } from './Help';
 
@@ -17,7 +18,7 @@ function fmtDuration(sec: number | null) {
 }
 
 /** Append to the first suitable track at the end of its clips. */
-function appendToTimeline(asset: Asset | null, preset?: TextPreset) {
+export function appendToTimeline(asset: Asset | null, preset?: TextPreset) {
   const state = useEditor.getState();
   const t = activeTimeline(state);
   const kind = asset ? asset.kind : 'text';
@@ -158,10 +159,10 @@ export function MediaBin() {
             onDoubleClick={() => canEdit && a.status === 'ready' && appendToTimeline(a)}
             title={canEdit ? 'Drag onto the timeline, or double-click to append' : a.name}
           >
-            <div className="asset-thumb" style={a.hasThumb ? { backgroundImage: `url(${thumbUrl(projectId, a.id)})` } : undefined}>
+            <SkimThumb asset={a} projectId={projectId} thumb={a.hasThumb ? thumbUrl(projectId, a.id) : undefined}>
               {!a.hasThumb && <Icon name={a.kind === 'audio' ? 'music' : a.kind === 'image' ? 'image' : 'film'} size={28} />}
               {a.duration !== null && <span className="duration">{fmtDuration(a.duration)}</span>}
-            </div>
+            </SkimThumb>
             <div className="asset-meta">
               <div className="asset-name">{a.name}</div>
               <div className="asset-sub">

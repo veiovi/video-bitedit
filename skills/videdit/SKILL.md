@@ -37,7 +37,7 @@ preview exactly.
      - Alternate `scale` 1 / 1.08 across jump cuts.
      - Add `transition`s (`fade`, `whip`, `zoom`, `dipBlack`) on cutaways.
      - With an OpenRouter key, add AI cutaways with `{ "generate": "<prompt in one shared style>", "track": "V2", "at": …, "duration": 2.5 }` over the speaker while their audio continues.
-     - Add `"captions": { "track": "V3" }` per timeline after `videdit transcribe`.
+     - Add `"captions": { "track": "V3" }` per timeline after `videdit transcribe`. For shorts, an animated look reads better: `"captions": { "track": "V3", "position": "bottom", "style": { "captionLook": "karaoke", "wordsPerLine": 3 } }` (looks: classic, karaoke, pop, bounce, typewriter, highlight, oneWord).
    - **Explainers.** Combine:
      - `{ "slide": { "layout": "bullets" | "split" | "stat" | "image" | "title" | "quote", … } }` (Remotion slides);
      - `{ "hyperframes": "motion/x.html" }` (HTML/GSAP motion rendered by HyperFrames);
@@ -48,7 +48,8 @@ preview exactly.
    again. The open editor reloads automatically.
 5. **Deliver.**
    - Local file: `videdit render <folder> --timeline <name>`. Output goes to
-     `<folder>/exports/`.
+     `<folder>/exports/`. `--from <time> --to <time>` renders only part, and
+     `--still <time>` saves one frame as a PNG.
    - Shareable editing link: `videdit push <folder>`. This needs `videdit
      deploy` to have been run once with `CLOUDFLARE_API_TOKEN`.
    - Public watch page: `videdit publish <folder> --timeline <name> --title "…"`.

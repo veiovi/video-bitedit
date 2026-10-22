@@ -4,7 +4,7 @@ import { exec, execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { RENDER_PRESETS, type RenderPresetId, findTimeline, formatTimecode, timelineDuration } from '../shared/project';
+import { type FrameRange, RENDER_PRESETS, type RenderPresetId, type Timeline, findTimeline, formatTimecode, parseTimecode, renderExt, renderRange, timelineDuration } from '../shared/project';
 import { THEMES } from '../shared/themes';
 import { editUrl, publishRender, replaceRenderOutput, pullProject, pushProject, runWorker, viewUrl } from './cloud';
 import { configPath, loadConfig, saveConfig, updateConfigFile, type CloudConfig } from './config';
@@ -36,6 +36,8 @@ Local editing
                                    Render a HyperFrames (HTML/GSAP) composition into a clip in the bin
   videdit render [folder]          Render a timeline to <folder>/exports
       --timeline <name>  --preset ${Object.keys(RENDER_PRESETS).join('|')}  --out <file>
+      --from <time>  --to <time>   render only part (times as 12.5, 1:05 or 00:01:05:12)
+      --still <time>               save the frame at that time as a PNG
 
 Cloud
   videdit deploy [--name videdit] [--with-openrouter]
@@ -47,7 +49,7 @@ Cloud
   videdit push [folder] [--force]  Upload the folder; prints the edit and view links
   videdit pull [folder]            Bring cloud edits back into the folder
   videdit publish [folder]         Push, render locally and publish a watch page
-      --timeline <name>  --title <t>  --description <d>  --preset <p>
+      --timeline <name>  --title <t>  --description <d>  --preset <p>  --from <time>  --to <time>
       --replace <watch URL or id>  re-render into an existing watch page (same link)
   videdit worker [--once]          Render jobs queued from the cloud editor
   videdit doctor                   Check FFmpeg, the build and the cloud connection
@@ -113,6 +115,19 @@ async function loadProject(folder: string | undefined, scan = true): Promise<Loc
     if (added.length) console.log(`Added ${added.length} media file(s) to the bin.`);
   }
   return project;
+}
+
+/** The frames --from/--to (or --still) pick out of a timeline; null for all of it. */
+function rangeFlags(timeline: Timeline, from: string | undefined, to: string | undefined, still?: string): FrameRange | null {
+  const at = (flag: string, text: string | undefined) => {
+    if (text === undefined) return undefined;
+    const f = parseTimecode(text, timeline.fps);
+    if (f === null) throw new Error(`--${flag}: not a time: "${text}" (try 12.5, 1:05 or 00:01:05:12)`);
+    return f;
+  };
+  const duration = timelineDuration(timeline);
+  if (still !== undefined) return renderRange({ start: at('still', still) }, duration, true);
+  return renderRange({ start: at('from', from), end: at('to', to) }, duration);
 }
 
 function describe(project: LocalProject) {
@@ -269,15 +284,19 @@ async function main() {
     }
     case 'render': {
       const project = await loadProject(positional[0]);
-      const preset = (str('preset') ?? 'mp4-1080p') as RenderPresetId;
+      const still = str('still');
+      const preset = (still !== undefined ? 'still-png' : (str('preset') ?? 'mp4-1080p')) as RenderPresetId;
       if (!(preset in RENDER_PRESETS)) throw new Error(`Unknown preset ${preset}`);
       const { doc } = project.state;
       const timeline = findTimeline(doc, str('timeline'));
       if (!timeline) throw new Error(`No timeline "${str('timeline')}"`);
+      const range = rangeFlags(timeline, str('from'), str('to'), still ?? (RENDER_PRESETS[preset].still ? '0' : undefined));
       const server = await startLocalServer(project, { port: 0 });
       const sources = Object.fromEntries(project.state.assets.map((a) => [a.id, `${server.url}/m/${project.state.id}/a/${a.id}`]));
-      const ext = RENDER_PRESETS[preset].audioOnly ? 'mp3' : 'mp4';
-      const output = path.resolve(str('out') ?? path.join(project.exportsDir(), `${doc.title} - ${timeline.name}.${ext}`.replace(/[/\\]/g, '_')));
+      const part = range ? ` ${formatTimecode(range.start, timeline.fps).replace(/:/g, '.')}` : '';
+      const output = path.resolve(
+        str('out') ?? path.join(project.exportsDir(), `${doc.title} - ${timeline.name}${part}.${renderExt(preset)}`.replace(/[/\\]/g, '_')),
+      );
       try {
         await renderTimeline({
           doc,
@@ -285,6 +304,7 @@ async function main() {
           sources,
           preset,
           output,
+          range,
           onProgress: (p) => process.stdout.write(`\rRendering ${timeline.name}: ${Math.round(p * 100)}%`),
         });
       } finally {
@@ -348,9 +368,11 @@ async function main() {
       const preset = (str('preset') ?? 'mp4-1080p') as RenderPresetId;
       const timeline = findTimeline(project.state.doc, str('timeline'));
       if (!timeline) throw new Error(`No timeline "${str('timeline')}"`);
+      if (RENDER_PRESETS[preset]?.still) throw new Error('Stills cannot be published; use `videdit render --still <time>`');
+      const range = rangeFlags(timeline, str('from'), str('to'));
       await pushProject(project, config, { force: Boolean(flags.force), log: console.log });
       const server = await startLocalServer(project, { port: 0 });
-      const output = path.join(project.exportsDir(), `${timeline.name}-${Date.now()}.${RENDER_PRESETS[preset].audioOnly ? 'mp3' : 'mp4'}`);
+      const output = path.join(project.exportsDir(), `${timeline.name}-${Date.now()}.${renderExt(preset)}`);
       try {
         await renderTimeline({
           doc: project.state.doc,
@@ -358,6 +380,7 @@ async function main() {
           sources: Object.fromEntries(project.state.assets.map((a) => [a.id, `${server.url}/m/${project.state.id}/a/${a.id}`])),
           preset,
           output,
+          range,
           onProgress: (p) => process.stdout.write(`\rRendering ${timeline.name}: ${Math.round(p * 100)}%`),
         });
       } finally {
@@ -372,6 +395,7 @@ async function main() {
       const watch = await publishRender(project, config, output, preset, timeline.id, {
         title: str('title') ?? `${project.state.doc.title}${project.state.doc.timelines.length > 1 ? ` · ${timeline.name}` : ''}`,
         description: str('description') ?? '',
+        range,
       });
       console.log(`Published: ${watch}\nEdit link: ${editUrl(project.remote!)}`);
       return;

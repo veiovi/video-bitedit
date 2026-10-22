@@ -82,20 +82,31 @@ below.
   muted palette.
 - Move, trim, split (S or the razor tool), ripple delete (X) and lift (Z), all
   with snapping and undo/redo.
-- CapCut-style editing. The main-track magnet keeps V1 gapless: drops insert,
+- Magnetic editing. The main-track magnet keeps V1 gapless: drops insert,
   moves reorder, and cuts close up. Linkage keeps captions and cutaways in
   sync. Drag media onto a clip to replace it at the same length, choosing
   which part of a longer clip plays. Desktop files can go straight onto the
   timeline. Box select, select backward and forward ([ ]), Q/W delete
   left/right, ⌘B split, and P/N/` toggle the magnet, snapping and linkage.
-- J/K/L shuttle, frame stepping and markers. ↑/↓ jump between cuts and
-  markers, a click on the timecode takes a typed time (12.5, 1:05, +2), and
-  ⌘-scroll or a pinch zooms around the pointer. Loop playback (⇧L) repeats
-  the selected clips, or the whole timeline.
-- Copy, cut, paste at the playhead and duplicate (⌘C/X/V/D), ⌥-drag to drag a
+- J/K/L shuttle and frame stepping. ↑/↓ jump between cuts and markers, a
+  click on the timecode takes a typed time (12.5, 1:05, +2), and ⌘-scroll or
+  a pinch zooms around the pointer. Loop playback (⇧L) repeats the in/out
+  range, the selected clips, or the whole timeline.
+- An in/out range (I, O) with draggable, snapping ends: lift it (⇧Z),
+  extract it (⇧X), play it once (⇧Space), loop it, or export just that part.
+- Markers: point markers (M) and range markers (⌥M) in eight colours. Drag
+  to move or resize, double-click to rename or delete, list them from the
+  ruler, and copy them as YouTube chapters. They follow ripple edits on the
+  main track.
+- Clickable comment pins on the ruler jump to the comment.
+- Copy, cut, paste at the playhead and duplicate (⌘C/X/V/D), ⌥⇧-drag to drag a
   copy, nudge by a frame (, . or ⌥←/→), turn clips off without deleting them
   (⇧E), and a right-click menu for all of it. Drags show the new position or
   length and a line where the clip snapped.
+- Speed from 0.25× to 4×, freeze frames (⇧F), roll (⌥-drag a cut), slip
+  (⌥-drag a clip), trim to the playhead (⌥[ ⌥]), and copy and paste a clip's
+  look onto other clips (⌥⌘C, ⌥⌘V). Track headers rename, recolour,
+  resize and reorder.
 - Per-clip volume, fades, opacity, scale, position, rotation, and fit or fill
   cropping for reframing vertical shorts. Per-track volume, mute, solo, hide
   and lock. Solo is for listening: it changes what the preview plays, never
@@ -103,8 +114,20 @@ below.
 - Fade knobs on each clip's top corners: drag them in to fade in or out.
 - A volume line on audio clips: drag it up or down (⇧ for fine steps),
   double-click for 100%.
-- Thumbnails, filmstrips, and waveforms on audio clips and under video clips.
-  Detach audio moves a video clip's sound to its own clip on an audio track,
+- Keyframes with easing for opacity, scale, position, rotation and volume:
+  ◆ in the inspector (or ;) keys the value at the playhead, sliders auto-key
+  once a property is animated, and each key picks linear, ease in, ease out,
+  ease in-out or hold. The selected clip shows its keys as diamonds to drag
+  or ⌥-click away. Trims, splits, speed changes and pasted looks keep the
+  animation on the footage.
+- Filmstrips along video clips (real frames for the part each clip plays),
+  waveforms on audio clips and under video clips, and skimming: move the
+  mouse across a video in the media bin to scrub through it.
+- Edit by text: the Transcript tab shows the speech as paragraphs. Click a
+  word to jump there, select a run and press ⌫ to cut it from every track;
+  cut words stay visible, struck through, and come back with a click.
+- A command palette (⌘K) for every command, marker, clip and help topic.
+- Detach audio moves a video clip's sound to its own clip on an audio track,
   to trim, move and fade it separately.
 
 **Look and sound**
@@ -118,6 +141,15 @@ below.
   cutaways, from the CLI, a cut list or the editor's Generate box.
 - Exports are loudness-normalised to −14 LUFS, the level social platforms
   expect.
+- Duck under speech: music dips by 6–24 dB wherever someone speaks on the
+  other tracks (found from transcripts or the waveform), as volume keyframes
+  you can adjust. Attack and release are adjustable, and Remove ducking takes
+  it out again.
+- Level meters on every audio track and a master meter, with a one-second
+  peak hold and red above 0 dBFS. They read the waveform at the playhead
+  with every volume, keyframe and fade applied, so they agree with the
+  export. Normalize brings a clip's peak to −1 dBFS, and the volume shows in
+  dB.
 
 **Explainers**
 - Remotion slides: title, bullets, split, image, stat and quote.
@@ -125,7 +157,9 @@ below.
 
 **Short-form**
 - Local word-timed transcription (whisper.cpp or OpenAI Whisper).
-- Caption clips with an active-word highlight.
+- Animated caption looks: classic, karaoke, pop, bounce, typewriter,
+  highlight box and one word at a time, with words per line, a safe-area
+  position and an accent colour. They render the same in preview and export.
 - Cuts snapped to the quietest moment nearby, so words and breaths are not
   clipped.
 - Several timelines share one media bin: a full cut in the footage's own shape
@@ -141,7 +175,9 @@ below.
   timecoded comments.
 - Workspace keys you can copy in one click. `videdit key` and unlock links
   (`…/#ws=KEY`) set up another browser or a render machine in one step.
-- A render queue with MP4 (project size), 720p draft and MP3 presets.
+- A render queue with MP4 (project size), 720p draft and MP3 presets, for
+  the whole timeline, the in/out range or a range marker, plus PNG stills of
+  the frame under the playhead.
 - Public watch pages with link previews and a version switcher. A watch page
   links to the view-only timeline, so its source clips are public too.
 - Uploads blank out phone GPS (QuickTime location atoms and JPEG EXIF), so
@@ -150,7 +186,8 @@ below.
 **Help built in**
 - A small ? next to every panel, section and dialog explains that part in a
   sentence or two.
-- Help (or the ? key) opens a guide to every feature and keyboard shortcut.
+- Help (or the ? key) opens a guide to every feature and keyboard shortcut,
+  and lists every command in the ⌘K palette.
 
 ## Quick start
 

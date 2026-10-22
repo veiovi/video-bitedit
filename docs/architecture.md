@@ -11,16 +11,45 @@ The model lives in `src/shared/project.ts`.
 - **Timeline**: `{ id, name, fps, width, height, background, tracks[], clips[], markers[] }`.
   Tracks are listed top to bottom, and higher video tracks draw over lower
   ones. There can be up to 10 video tracks and 8 audio tracks.
-- **Clip**: `{ id, kind, trackId, start, duration, assetId?, in?, volume?, muted?, disabled?, fadeIn?, fadeOut?, opacity?, scale?, rotation?, offsetX?, offsetY?, fit?, text?, words? }`.
-  All times are integer frames. `in` is the offset into the source. Kinds
+- **Marker**: `{ id, frame, label, color?, duration? }`. A marker with a
+  `duration` is a range marker covering `[frame, frame + duration)`.
+  `color` is one of `MARKER_COLORS`. Markers belong to the whole timeline:
+  `closeRange` and `openRange` move them when time is removed or added
+  through every unlocked track or through the main track alone, and leave
+  them when a single other track closes or opens. A point marker inside a
+  removed span goes; a range marker loses the overlap, and one spanning an
+  insert point grows. The pure ops are `addMarker`, `updateMarker`,
+  `moveMarker` and `removeMarker`; `chaptersFromMarkers` turns point
+  markers into `0:00 Title` chapter lines (first chapter at 0:00, at least
+  `CHAPTER_MIN_SECONDS` apart and before the end, skipped markers listed).
+- **Clip**: `{ id, kind, trackId, start, duration, assetId?, in?, volume?, muted?, disabled?, fadeIn?, fadeOut?, opacity?, scale?, rotation?, offsetX?, offsetY?, fit?, text?, words?, speed?, freeze?, keyframes? }`.
+  All times are integer frames. `in` is the offset into the source, in
+  source frames. `speed` (video and audio, 0.25–4, default 1) plays
+  `duration × speed` source frames from `in`; `clipSpeed` gives it, and the
+  edit ops move `in` by timeline frames × speed. A `freeze` clip is a silent
+  video clip that holds the source frame at `in` for its whole length
+  (`clipSpeed` 0). Tracks may carry `color` and a row `height` (small or
+  large) for the editor. Kinds
   are `video`, `audio`, `image`, `text` and `caption`. An audio clip may play
   a video asset's sound: Detach audio (`detachAudio`) adds one on a free audio
   track and sets `muted` on the video clip. A `disabled` clip stays on the
   timeline but is skipped in preview and export. Fades scale opacity for visuals and
   gain for sound.
+- **Keyframes** (`src/shared/keyframes.ts`): `keyframes` maps a property
+  (`opacity`, `scale`, `offsetX`, `offsetY`, `rotation`, `volume`) to keys
+  `{ frame, value, ease?, duck? }`, in frames from the clip's start (0 to
+  duration − 1), sorted, one per frame. A property with keys ignores its
+  static value. `valueAt(clip, prop, frame)` is the curve: it holds the first
+  key's value before it and the last key's after it, and between two keys
+  follows the first key's `ease` (`linear` by default, `hold`, or cubic
+  `easeIn`, `easeOut`, `easeInOut`). `animatableProps` lists what each kind
+  draws: video and images the transform and opacity (video also volume,
+  unless frozen), text and captions opacity, scale and rotation, audio
+  volume. `duck` marks volume keys that ducking wrote.
 - **Caption clip**: `kind: 'caption'` with `words: [{ text, start, end }]` in
   frames relative to the clip's start, and `text` for the look (the theme's
-  caption preset plus `highlight`). Edits that move a clip's head (trim,
+  caption preset plus `highlight`, the accent colour, `captionLook` and
+  `wordsPerLine`; see Preview and render). Edits that move a clip's head (trim,
   split, overwrite, `cropRange`) shift and clip its words, just as they move
   `in` for media.
 - **Transcript** (`src/shared/captions.ts`): an asset sidecar,
@@ -29,11 +58,39 @@ The model lives in `src/shared/project.ts`.
   Whisper locally on a 16 kHz mono extract. `captionClipsFor` maps
   transcript words into the media clips of a timeline, which is how cut lists
   generate captions.
+- **Asset filmstrip**: videos carry `filmstrip: { frames, every, width, height }`,
+  describing a JPEG sprite of `frames` frames side by side, frame i showing
+  the source at i × `every` seconds, each `width` × `height` pixels
+  (`filmstripPlan`: a frame every 2 s, at most 60, 160 px wide). Locally,
+  FFmpeg makes it at import (`fps` and `tile` filters), and videos imported
+  earlier get one in the background when the editor opens the project. Cloud
+  uploads draw it in the browser by seeking a `<video>` into a canvas. The
+  timeline draws, along each video clip, the frames for the part of the
+  source it shows at the current zoom (falling back to the tiled thumbnail),
+  and the media bin uses the same sprite when the mouse skims across a card
+  (a muted `<video>` when there is no sprite; nothing on touch).
 - **Edits** are pure functions in `src/shared/edits.ts`. Placement overwrites:
   a placed clip carves out the range it lands on. Split, trim, ripple delete,
   `deriveTimeline` (format conversion with crop to fill) and `cropRange`
   (highlight range) live there too.
-- **Timeline editing follows CapCut.**
+- **Edits keep keyframes on the footage.** `reframe`, which every head or
+  tail trim goes through (trims, splits, overwrites, ripple trims, rolls,
+  `cropRange`), shifts keys by the head trim and cuts them to the new length
+  with `cropKeys`: where the curve crosses an edge, a key goes on the edge
+  with the value the curve had there, then keys outside are dropped. Linear
+  and hold spans stay exact; an eased span cut part-way keeps its ends and
+  its ease. A split therefore gives each half its own keys plus one at the
+  cut, so values run on. `setSpeed` stretches keys with the clip's length.
+  `freezeFrame` gives the still the animated values at its frame as static
+  ones. `detachAudio` moves volume keys to the new audio clip, and
+  `clipAttributes`/`pasteAttributes` treat keys as part of the look: each
+  pasted property takes the copied keys (cut to the target's length, after
+  any speed change) or loses its own. The key ops are `setKeyframe` (add,
+  or replace at that frame, keeping its ease unless given), `removeKeyframe`,
+  `moveKeyframe` (kept inside the clip) and `clearKeyframes` (the value at a
+  frame becomes the static value). `duckClips`, `removeDucking` and
+  `setClipGain` (volume and volume keys scale together) are the audio ops.
+- **Timeline editing.**
   - **Main-track magnet** (P, on by default; the setting is kept per browser).
     The main track is the bottom video track (V1, `mainTrackId`), and it stays
     gapless. A drop on it inserts at the nearest clip edge and pushes
@@ -63,7 +120,7 @@ The model lives in `src/shared/project.ts`.
     A move snaps by whichever edge finds a snap point, measured against the
     timeline as it was when the drag began, and a dashed line shows where.
   - **Clipboard.** ⌘C/⌘X/⌘V/⌘D copy, cut, paste at the playhead and duplicate
-    after the selection (`pasteClips`), and ⌥-drag drags copies. The
+    after the selection (`pasteClips`), and ⌥⇧-drag drags copies. The
     clipboard lives in the tab. Copies keep their tracks and offsets; with the
     magnet on, copies that land on the main track insert instead of
     overwriting. A right-click menu offers the same actions, and "Paste here"
@@ -83,6 +140,124 @@ The model lives in `src/shared/project.ts`.
     (`loopRange`) or the whole timeline: the player loops the timeline, and
     leaving the selection while playing seeks back to its start (its end when
     playing backwards). The ruler shades the looped stretch.
+  - **In/out range.** I and O set `markIn` and `markOut` in the store (O
+    marks the frame after the playhead, so the range includes it). The
+    range is editor state, not part of the document: `setMarks` keeps it per
+    timeline in `localStorage` (`videdit.range.<project>.<timeline>`), and
+    `markedRange` reads it, clamped to the timeline (an unset in point means
+    the start, an unset out point the end). The ruler shades it with
+    draggable handles that snap like clips (`RulerMarks.tsx`), and the
+    ruler's corner shows its length. ⌥X clears it. ⇧Z lifts it
+    (`liftRange`: split every unlocked track at both ends and remove what is
+    between) and ⇧X extracts it (`extractRange`: lift, then `closeRange`);
+    without a range those keys keep their old meaning (fit, ripple delete).
+    ⇧Space plays it once (`playOnce`; the preview pauses on the out frame),
+    and loop playback repeats it ahead of the selection (`loopRange`).
+  - **Markers.** M adds a point marker at the playhead, ⌥M a range marker
+    over the in/out range or the selection. On the ruler a click jumps, a
+    drag moves (snapping, one undo step through `preview` and
+    `commitFrom`), dragging a range marker's right end resizes it, and a
+    double-click opens a popover to rename, recolour, make a point or
+    delete. The Markers button in the ruler's corner lists them in time
+    order and copies the point markers as YouTube chapters
+    (`chaptersFromMarkers`). Comment pins on the ruler jump to their frame
+    and open the comments panel with the comment highlighted
+    (`highlightComment`).
+  - **Timing.** Speed (`setSpeed`, from the inspector) keeps a clip's `in`
+    and the footage it plays, so its length scales; on the main track with
+    the magnet on, the rest ripples like an end trim, and elsewhere a longer
+    clip overwrites what follows. ⇧F (`freezeFrame`) splits a video clip at
+    the playhead and puts a two-second still of that exact source frame
+    there: an insert that ripples on the main track with the magnet on, an
+    overwrite elsewhere. The composition draws a still with `<Freeze>`
+    around the video, and plays sped-up or slowed clips with `playbackRate`.
+    Pitch is kept: the browser's media elements preserve it in the preview,
+    and the export time-stretches the audio. ⌥-dragging the cut between two
+    touching clips rolls it (`rollEdit`): one side longer, the other
+    shorter, each limited by its source. ⌥-dragging a video or audio clip
+    slips it (`slipClip`): the footage follows the pointer while the clip
+    stays put, and the preview seeks to the clip's first frame. ⌥⇧-drag
+    (or ⌥-drag of a clip that cannot slip, or of a multi-selection) drags a
+    copy. ⌥[ and ⌥] (also ⇧[ and ⇧]) trim the selection's start or end to
+    the playhead (`trimToFrame`), lengthening clips when the playhead is
+    outside them and the source allows; main-track clips ripple with the
+    magnet on.
+  - **Copy attributes.** ⌥⌘C takes the selected clip's look
+    (`clipAttributes`: effects, transition, opacity, transform, speed,
+    volume and their keyframes) and ⌥⌘V pastes it onto every selected clip
+    (`pasteAttributes`). Each clip takes what applies to its kind, and a
+    pasted effect replaces one of the same type.
+  - **Track headers.** Double-click a name to rename it (`renameTrack`; the
+    track keeps its colour). The stripe on the header's left opens eight
+    colour swatches, and clips take the track's colour with a stripe on
+    their left edge. The arrow button cycles the row height. Dragging a
+    header reorders tracks of its kind (`reorderTrack`); the bottom video
+    track is always the main track, so moving another there makes it main.
+  - **Timeline view.** Seeking stops at the last frame. Zoomed in past six
+    pixels per frame, the ruler marks every frame. Dragging a clip, an edge
+    or a selection box near the left or right edge scrolls the timeline.
+  - **Text-based editing.** The Transcript tab shows the timeline's speech
+    as paragraphs (a new one after a pause of more than 1 s). `timelineTranscript`
+    (`src/shared/transcript.ts`) maps each audible media clip's transcript
+    words through its start and in-point, and uses caption clips' words where
+    no transcribed media plays. Clicking a word seeks; the word under the
+    playhead is underlined. Dragging or ⇧-clicking selects a run, shaded on
+    the ruler, and ⌫ (or Cut) removes those frames from every unlocked track
+    in one undo step (`cutRange`, built on `closeRange`). Speech a cut removed
+    shows struck through at the cut: wherever two neighbouring clips of one
+    file skip part of the source, its words are listed there. Clicking a
+    struck run undoes the cut when it was the last edit; otherwise it reopens
+    the source (`restoreSourceGap`: everything after moves right on every
+    unlocked track and the clips before the cut play on). Caption clips over
+    a restored stretch are not regenerated.
+  - **Keyframing.** Each property a clip can animate gets ◆ in the
+    inspector: it adds a key at the playhead with the value showing there,
+    or removes the key that is there (`toggleKeyframe` in
+    `src/web/keyframing.ts`); ‹ and › seek to the previous and next key
+    (`adjacentKey`). Once a property has keys, its slider shows the value at
+    the playhead and moving it sets a key there (auto-key, one undo step per
+    gesture). With a key under the playhead, Then picks its ease and Clear
+    removes the property's keys. `;` toggles a key on the selected clip for
+    the property last used in the inspector (opacity, or volume on audio, by
+    default). The selected clip shows one diamond per keyed frame along its
+    bottom edge: dragging moves every key on that frame (snapped to frames,
+    inside the clip, one undo step through `preview`/`commitFrom`),
+    ⌥-click deletes them, a click seeks to them. An audio clip with volume
+    keys draws its curve, on the volume line's scale, instead of the line,
+    and waveforms follow the keyed gain.
+  - **Ducking.** Duck under speech (an audio clip's inspector, or
+    right-click an audio track header) works on that whole track.
+    `speechRanges` (`src/shared/ducking.ts`) finds speech on the other
+    unmuted tracks: transcript words for assets that have a transcript,
+    otherwise frames whose peak, after the clip's gain, rises above −26 dBFS.
+    `duckingKeys` merges phrases closer than `minGap` (15 frames) or than the
+    ramps need, and keys each music clip from its own volume down by `depth`
+    (−12 dB; −6 to −24) from `attack` frames (6) before each phrase until
+    `release` frames (12) after it. The keys are tagged `duck` and written in
+    one undo step (`duckClips`); they replace the clip's volume keys, after a
+    confirm when some were set by hand. Remove ducking (`removeDucking`)
+    takes out only tagged keys. Depth, attack and release are remembered in
+    the browser.
+  - **Levels and Normalize.** `src/shared/levels.ts` reads levels from the
+    stored peaks with the composition's gain: source peak under the frame
+    (following `in` and speed) × `valueAt(volume)` × fades × track volume,
+    with muted tracks, hidden video tracks and disabled clips silent
+    (`mixLevels`). Each audio track header has a meter and the transport a
+    master meter (`components/Meter.tsx`). They redraw through refs from one
+    subscription to the playhead, the document and solo (the preview's solo
+    applies), fall back at 24 dB/s while playing, hold the peak for a second
+    (red above 0 dBFS), and show the level at the playhead when stopped. The
+    master combines tracks by power; measured against exports it lands within
+    a dB or two of the mix's sample peak. Normalize (`clipPeak`,
+    `normalizeGain`, `setClipGain`) sets a clip's gain so its loudest sample
+    reaches −1 dBFS, at most 200%; its volume keys scale with it. The
+    inspector shows volume in dB beside the percentage.
+  - **Command palette.** ⌘K (Ctrl+K) searches every editor command, the
+    timeline's markers, the media bin ("Add to timeline") and the Help topics
+    with a fuzzy match (`src/shared/fuzzy.ts`). The commands come from one
+    registry, `src/web/commands.ts`, which the Help panel also lists with
+    their shortcuts; `components/CommandPalette.tsx` maps each command ID to
+    the store action it runs.
   - **Gaps and files.** Clicking an empty stretch of the main track
     (when the magnet is off) selects it (`gapAt`), and Delete closes it.
     Overlay and audio tracks are free placement, so their gaps are never
@@ -98,11 +273,23 @@ already seeked to its in-point, so playback does not hitch at cuts while a new
 media element loads. Rendering ignores premounting. `src/node/render.ts` bundles it once per process and
 renders with `@remotion/renderer` (headless Chrome + FFmpeg). Draft presets
 downscale through `renderMedia({ scale })`, so the layout is identical at
-every size. Caption clips are drawn by `chunkCaptions`. It groups words into
-lines of up to four, balancing longer phrases (5 → 3 + 2). A line breaks after
+every size. A render may carry a `range` (frames `[start, end)`), passed to
+`renderMedia` as its inclusive `frameRange`; `renderRange` checks it against
+the timeline on both servers and treats a range covering everything as the
+whole timeline. The `still-png` preset renders the frame at `range.start`
+with `renderStill`. Stills render locally or on a cloud render worker like
+any other job, and cannot be published.
+Caption clips are drawn by `chunkCaptions`. It groups words into
+lines of up to `wordsPerLine` (default four, one for the one-word look),
+balancing longer phrases (5 → 3 + 2). A line breaks after
 punctuation and at pauses of 140 ms or more, rounded to whole frames. It
 stays up until the next line starts, or 0.6 s after its last word. The word
-being spoken is the last one whose start has passed. Title fonts are bundled through `@fontsource`, and the
+being spoken is the last one whose start has passed. Each line is drawn in
+the clip's caption look (`src/shared/captionLooks.ts`: classic, karaoke, pop,
+bounce, typewriter, highlight box, one word): `wordLooks` gives every word's
+opacity, scale, lift, accent, fill and box as a pure function of the frame,
+and `src/remotion/CaptionLine.tsx` draws it. The inspector's look picker
+previews each look with that same component. Title fonts are bundled through `@fontsource`, and the
 composition holds rendering until they have loaded.
 
 ## Effects, transitions and AI images
@@ -142,25 +329,30 @@ one it is talking to. `GET /api/health` reports `mode: 'local' | 'cloud'`.
 | `POST /api/p/:id/assets` → `PUT …/parts/:n` → `POST …/complete` | Chunked upload in 16 MB parts, under the Worker's 100 MB request limit |
 | `PUT …/assets/:aid/thumb`, `…/peaks` | Thumbnail JPEG and waveform peaks (50 values per second, 0–255) |
 | `PUT …/assets/:aid/transcript` | Word-timed transcript JSON (edit access) |
-| `GET /m/:id/a/:aid[/thumb\|/peaks\|/transcript]` | Media with Range support, and its side files |
+| `PUT …/assets/:aid/filmstrip?frames=&every=&width=&height=` | Filmstrip sprite JPEG for a video; returns the asset with `filmstrip` set. The local server makes its own with FFmpeg and ignores it |
+| `GET /m/:id/a/:aid[/thumb\|/peaks\|/transcript\|/filmstrip]` | Media with Range support, and its side files |
 | `GET/POST/PATCH/DELETE /api/p/:id/comments` | Timecoded comments. Anyone with the link may post |
-| `POST /api/p/:id/renders` | Queue a render `{ preset, timelineId, publish?, title?, description? }` |
+| `POST /api/p/:id/renders` | Queue a render `{ preset, timelineId, publish?, title?, description?, range? }`. `range` is `{ start, end }` in frames (end exclusive); a `still-png` render uses `range.start` |
 | `POST /api/p/:id/renders/:rid/publish` | Publish a finished render |
 | `GET /api/w/:rid`, `GET /w/:rid` | Public watch data, plus `versions`: the project's other published timelines for the watch page's switcher (`pickVersions`). The Worker adds `og:` tags to the HTML |
 | `POST /api/worker/claim`, `…/progress`, `…/upload`, `…/complete`, `…/fail` | Render worker protocol |
 | `POST /api/p/:id/push` | Local only: upload the folder to the configured cloud |
 
 **Cloud** (`src/worker/index.ts`): D1 tables `projects`, `assets`, `renders`
-and `comments` (`migrations/`). R2 keys are `p/<project>/a/<asset>/source`,
-`thumb.jpg`, `peaks.json`, `transcript.json` and
-`p/<project>/r/<render>/output.mp4`. Static
+and `comments` (`migrations/`). A render's range is stored in
+`range_start` and `range_end` (both NULL for the whole timeline). R2 keys are `p/<project>/a/<asset>/source`,
+`thumb.jpg`, `filmstrip.jpg`, `peaks.json`, `transcript.json` and
+`p/<project>/r/<render>/output.mp4`. The filmstrip's layout is JSON in
+`assets.filmstrip` (migration 0003). Static
 assets are served by Workers Assets. `/api/*`, `/m/*` and `/w/*` run the
 Worker first.
 
 **Local** (`src/node/local-server.ts`): one project folder.
 - `videdit.json` holds the doc and assets.
-- `.videdit/` holds thumbnails, peaks (for every audio and video file; `[]`
-  when a video has no sound, and made on first request for older imports),
+- `.videdit/` holds thumbnails, filmstrips (`thumbs/<assetId>.filmstrip.jpg`), peaks (for every audio and video file; `[]`
+  when a video has no sound, and made on first request for older imports;
+  each value is the loudest sample of any channel in its 20 ms, decoded at
+  48 kHz, so meters and Normalize read true sample peaks),
   transcripts (`transcripts/<assetId>.json`),
   comments, renders and the cloud link (`remote.json`, which includes the
   edit key).

@@ -1,4 +1,4 @@
-// Replace a clip's media, the way CapCut does it: the clip keeps its slot
+// Replace a clip's media: the clip keeps its slot
 // (start and length), and for longer media you drag a fixed-length window to
 // choose which part plays. Media shorter than the clip is refused; images
 // always fit.

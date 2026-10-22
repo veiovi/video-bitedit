@@ -1,3 +1,4 @@
+import type { CaptionLook } from './captionLooks';
 import type { TextAnimation, TextPreset } from './themes';
 
 // The project document: one shared asset bin and several timelines (for
@@ -20,9 +21,50 @@ export interface Asset {
   width: number | null;
   height: number | null;
   hasThumb: boolean;
+  /** Videos: a sprite of frames sampled through the file, served at /m/:id/a/:aid/filmstrip. */
+  filmstrip?: Filmstrip | null;
   /** `deleted` assets are hidden from the bin but kept, so older versions still play. */
   status: 'uploading' | 'ready' | 'deleted';
   createdAt: number;
+}
+
+/**
+ * A filmstrip sprite: `frames` frames side by side in one JPEG row, frame i
+ * showing the source at i × `every` seconds. `width` and `height` are one
+ * frame's size in pixels.
+ */
+export interface Filmstrip {
+  frames: number;
+  every: number;
+  width: number;
+  height: number;
+}
+
+export const FILMSTRIP = { every: 2, maxFrames: 60, width: 160 } as const;
+
+/** How to sample a video of `duration` seconds: a frame every 2 s, at most 60 frames. */
+export function filmstripPlan(duration: number): { frames: number; every: number } {
+  const d = Math.max(0, duration);
+  const every = Math.max(FILMSTRIP.every, Math.ceil((d / FILMSTRIP.maxFrames) * 100) / 100);
+  return { frames: Math.max(1, Math.min(FILMSTRIP.maxFrames, Math.ceil(d / every))), every };
+}
+
+/** Which sprite frame shows the source at `seconds`. */
+export function filmstripFrame(strip: Pick<Filmstrip, 'frames' | 'every'>, seconds: number): number {
+  return Math.max(0, Math.min(strip.frames - 1, Math.floor(seconds / strip.every)));
+}
+
+/** Shape check for filmstrip metadata received over the API or read from disk. */
+export function isFilmstrip(x: unknown): x is Filmstrip {
+  const f = x as Filmstrip;
+  return (
+    typeof f === 'object' &&
+    f !== null &&
+    [f.frames, f.every, f.width, f.height].every((n) => typeof n === 'number' && Number.isFinite(n) && n > 0) &&
+    f.frames <= FILMSTRIP.maxFrames &&
+    f.width <= 1000 &&
+    f.height <= 1000
+  );
 }
 
 export interface Track {
@@ -36,7 +78,11 @@ export interface Track {
   muted?: boolean;
   hidden?: boolean;
   locked?: boolean;
+  /** Row height in the editor; normal when unset. Preview and export ignore it. */
+  height?: TrackHeight;
 }
+
+export type TrackHeight = 'small' | 'normal' | 'large';
 
 export const TRACK_LIMITS = { video: 10, audio: 8 } as const;
 
@@ -79,6 +125,10 @@ export interface TextStyle {
   fontFamily?: string;
   /** Caption clips: colour of the word being spoken; defaults to the theme's. */
   highlight?: string;
+  /** Caption clips: how the words animate (see shared/captionLooks.ts); defaults to classic. */
+  captionLook?: CaptionLook;
+  /** Caption clips: most words on a line, 1–6 (default 4). */
+  wordsPerLine?: number;
 }
 
 /** One caption word, in frames relative to its clip's start. */
@@ -124,6 +174,53 @@ export interface Clip {
   effects?: Effect[];
   /** How this clip enters from the clip just before it on the same track. */
   transition?: Transition;
+  /**
+   * Video and audio clips: playback speed, SPEED_LIMITS.min to max (default 1).
+   * The clip plays `duration × speed` frames of its source from `in`.
+   */
+  speed?: number;
+  /** Video clips: a still of the source frame at `in`, held for the clip's whole length, without sound. */
+  freeze?: boolean;
+  /**
+   * Animation: per property, keys in frames relative to the clip's start
+   * (see shared/keyframes.ts). A property with keys ignores its static value.
+   */
+  keyframes?: Keyframes;
+}
+
+/** Clip properties that can be animated with keyframes. */
+export type KeyframeProp = 'opacity' | 'scale' | 'offsetX' | 'offsetY' | 'rotation' | 'volume';
+
+/** How the value travels from a key to the next one. `hold` keeps it until the next key. */
+export type KeyframeEase = 'linear' | 'hold' | 'easeIn' | 'easeOut' | 'easeInOut';
+
+export interface Keyframe {
+  /** Frames from the clip's start, 0 to duration − 1. */
+  frame: number;
+  value: number;
+  /** The shape of the span after this key; linear when unset. */
+  ease?: KeyframeEase;
+  /** Set on volume keys written by Duck under speech, so Remove ducking can find them. */
+  duck?: true;
+}
+
+export type Keyframes = Partial<Record<KeyframeProp, Keyframe[]>>;
+
+export const SPEED_LIMITS = { min: 0.25, max: 4 } as const;
+export const SPEED_PRESETS = [0.25, 0.5, 1, 1.5, 2, 4] as const;
+
+/**
+ * Source frames a clip plays per timeline frame: its speed for video and
+ * audio, 0 for a freeze frame (the source never advances), and 1 otherwise.
+ */
+export function clipSpeed(clip: Clip): number {
+  if (clip.freeze) return 0;
+  return (clip.kind === 'video' || clip.kind === 'audio') && clip.speed ? clip.speed : 1;
+}
+
+/** "2×", "0.5×", "1.25×" */
+export function speedLabel(speed: number): string {
+  return `${Number(speed.toFixed(2))}×`;
 }
 
 export type SlideLayout = 'title' | 'bullets' | 'image' | 'split' | 'stat' | 'quote';
@@ -176,6 +273,28 @@ export interface Marker {
   id: string;
   frame: number;
   label: string;
+  /** One of MARKER_COLORS (hex); the editor's accent colour when unset. */
+  color?: string;
+  /** Frames; a range marker covers [frame, frame + duration). Unset for a point marker. */
+  duration?: number;
+}
+
+/** Colours a marker can take. */
+export const MARKER_COLORS = [
+  { name: 'red', hex: '#d0533f' },
+  { name: 'orange', hex: '#e08a3c' },
+  { name: 'yellow', hex: '#e2c043' },
+  { name: 'green', hex: '#7aa35a' },
+  { name: 'teal', hex: '#4f9e98' },
+  { name: 'blue', hex: '#5a7fc0' },
+  { name: 'purple', hex: '#8e68b0' },
+  { name: 'pink', hex: '#cf7aa0' },
+] as const;
+
+/** A stretch of a timeline, frames [start, end). */
+export interface FrameRange {
+  start: number;
+  end: number;
 }
 
 export interface Timeline {
@@ -255,6 +374,8 @@ export interface RenderRecord {
   publishedAt: number | null;
   publishTitle: string | null;
   publishDescription: string | null;
+  /** The part of the timeline rendered; null or unset for the whole timeline. A still renders the frame at `range.start`. */
+  range?: FrameRange | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -310,7 +431,7 @@ export function aspectLabel(width: number, height: number): string {
 export function pickVersions(videos: (PublishedVideo & { timelineId: string })[]): PublishedVersion[] {
   const latest = new Map<string, PublishedVideo & { timelineId: string }>();
   for (const v of videos) {
-    if (v.preset === 'audio-mp3') continue;
+    if (v.preset === 'audio-mp3' || v.preset === 'still-png') continue;
     const seen = latest.get(v.timelineId);
     if (!seen || v.publishedAt > seen.publishedAt) latest.set(v.timelineId, v);
   }
@@ -335,11 +456,48 @@ export interface Comment {
 }
 
 export const RENDER_PRESETS = {
-  'mp4-1080p': { label: 'MP4 · project size', scale: 1, audioOnly: false },
-  'mp4-720p': { label: 'MP4 · 720p draft', scale: 720 / 1080, audioOnly: false },
-  'audio-mp3': { label: 'Audio only · MP3', scale: 1, audioOnly: true },
+  'mp4-1080p': { label: 'MP4 · project size', scale: 1, audioOnly: false, still: false },
+  'mp4-720p': { label: 'MP4 · 720p draft', scale: 720 / 1080, audioOnly: false, still: false },
+  'audio-mp3': { label: 'Audio only · MP3', scale: 1, audioOnly: true, still: false },
+  /** One frame as a PNG: the frame at the render's `range.start`. */
+  'still-png': { label: 'Still · PNG', scale: 1, audioOnly: false, still: true },
 } as const;
 export type RenderPresetId = keyof typeof RENDER_PRESETS;
+
+/** File extension of a render's output. */
+export function renderExt(preset: RenderPresetId): 'mp4' | 'mp3' | 'png' {
+  const p = RENDER_PRESETS[preset];
+  return p.still ? 'png' : p.audioOnly ? 'mp3' : 'mp4';
+}
+
+/** MIME type of a render's output. */
+export function renderMime(preset: RenderPresetId): string {
+  return { mp4: 'video/mp4', mp3: 'audio/mpeg', png: 'image/png' }[renderExt(preset)];
+}
+
+/**
+ * The range a render request asks for, checked against the timeline's
+ * length: rounded to frames and kept inside the timeline. Returns null for
+ * the whole timeline (no range, or one that covers all of it); throws when
+ * the range is empty or not numbers. A still needs only `start`: its range
+ * is that one frame.
+ */
+export function renderRange(raw: unknown, duration: number, still = false): FrameRange | null {
+  if (raw === null || raw === undefined) return still ? { start: 0, end: Math.min(1, duration) } : null;
+  if (typeof raw !== 'object') throw new Error('The range must be { start, end } in frames');
+  const r = raw as { start?: unknown; end?: unknown };
+  const num = (v: unknown, fallback: number) => (v === undefined || v === null ? fallback : Number(v));
+  const start = Math.max(0, Math.round(num(r.start, 0)));
+  if (!Number.isFinite(start)) throw new Error('The range must be { start, end } in frames');
+  if (still) {
+    if (start >= duration) throw new Error('The still frame is past the end of the timeline');
+    return { start, end: start + 1 };
+  }
+  const end = Math.min(duration, Math.round(num(r.end, duration)));
+  if (!Number.isFinite(end)) throw new Error('The range must be { start, end } in frames');
+  if (end <= start) throw new Error('The range is empty');
+  return start === 0 && end === duration ? null : { start, end };
+}
 
 /** Shape of IDs that clients may choose themselves (asset IDs on push). */
 export const CLIENT_ID_PATTERN = /^[A-Za-z0-9]{8,32}$/;

@@ -67,6 +67,25 @@ describe('cut lists', () => {
     expect([sound.assetId, sound.in, sound.duration, sound.fadeOut, sound.muted]).toEqual(['aaaaaaaa', 60, 120, 30, undefined]);
   });
 
+  it('plays clips at a speed, keeping in and out in source seconds', () => {
+    const doc = buildFromCutList(
+      {
+        clips: [
+          { asset: 'intro', in: 2, out: 6, speed: 2 },
+          { asset: 'b-roll.mov', in: 1, duration: 3, speed: 0.5 },
+          { asset: 'logo.png', duration: 2, speed: 2 },
+        ],
+      },
+      assets,
+    );
+    const clips = doc.timelines[0].clips;
+    expect(clips.map((c) => [c.start, c.duration, c.in, c.speed])).toEqual([
+      [0, 60, 60, 2],
+      [60, 90, 30, 0.5],
+      [150, 60, undefined, undefined],
+    ]);
+  });
+
   it('clamps to the source length', () => {
     const doc = buildFromCutList({ clips: [{ asset: 'intro', in: 8, duration: 30 }] }, assets);
     expect(doc.timelines[0].clips[0].duration).toBe(60);
@@ -157,6 +176,29 @@ describe('cut list captions', () => {
     expect([style.y, style.fontSize]).toEqual([0.7, 78]);
   });
 
+  it('takes an animated caption look, words per line and a safe-area position', () => {
+    const doc = buildFromCutList(
+      {
+        timelines: [
+          {
+            name: 'Main',
+            format: 'vertical',
+            clips: [{ asset: 'intro' }],
+            captions: { position: 'top', style: { captionLook: 'karaoke', wordsPerLine: 2, highlight: '#00e5ff' } },
+          },
+        ],
+      },
+      assets,
+      undefined,
+      { transcripts },
+    );
+    const style = doc.timelines[0].clips.find((c) => c.kind === 'caption')!.text!;
+    expect([style.captionLook, style.wordsPerLine, style.highlight, style.y]).toEqual(['karaoke', 2, '#00e5ff', 0.2]);
+    expect(() =>
+      buildFromCutList({ clips: [{ asset: 'intro' }], captions: { style: { captionLook: 'sparkle' as never } } }, assets, undefined, { transcripts }),
+    ).toThrow(/unknown caption look/);
+  });
+
   it('asks for transcripts when there are none', () => {
     expect(() => buildFromCutList({ clips: [{ asset: 'intro' }], captions: 'auto' }, assets)).toThrow(/videdit transcribe/);
   });
@@ -219,5 +261,51 @@ describe('slides in cut lists', () => {
     expect(c.kind).toBe('slide');
     expect(c.duration).toBe(120);
     expect(c.slide).toMatchObject({ layout: 'split', title: 'Hello', imageAssetId: 'dddddddd' });
+  });
+});
+
+describe('cut-list keyframes', () => {
+  it('converts keys in seconds to frames on the clip', () => {
+    const doc = buildFromCutList(
+      {
+        clips: [
+          {
+            asset: 'intro',
+            in: 0,
+            out: 4,
+            keyframes: {
+              opacity: [
+                { at: 0, value: 0 },
+                { at: 1, value: 1, ease: 'easeOut' },
+              ],
+              scale: [{ at: 2, value: 1.2 }],
+            },
+          },
+          { asset: 'music.mp3', track: 'A1', at: 0, duration: 4, keyframes: { volume: [{ at: 3, value: 0.2, ease: 'linear' }] } },
+        ],
+      },
+      assets,
+    );
+    // Both start at 0, so find them by kind rather than by order.
+    const video = doc.timelines[0].clips.find((c) => c.kind === 'video')!;
+    const music = doc.timelines[0].clips.find((c) => c.kind === 'audio')!;
+    expect(video.keyframes).toEqual({
+      opacity: [
+        { frame: 0, value: 0 },
+        { frame: 30, value: 1, ease: 'easeOut' },
+      ],
+      scale: [{ frame: 60, value: 1.2 }],
+    });
+    expect(music.keyframes).toEqual({ volume: [{ frame: 90, value: 0.2 }] });
+  });
+
+  it('names the clip and the problem for bad keys', () => {
+    const build = (keyframes: object, item: object = { asset: 'intro', out: 2 }) => () => buildFromCutList({ clips: [{ ...item, keyframes } as never] }, assets);
+    expect(build({ blur: [{ at: 0, value: 1 }] })).toThrow(/clip 1: a video clip cannot animate "blur"/);
+    expect(build({ volume: [{ at: 0, value: 1 }] }, { text: 'Hi', duration: 2 })).toThrow(/text clip cannot animate "volume"/);
+    expect(build({ opacity: [{ at: 5, value: 1 }] })).toThrow(/at must be seconds inside the clip/);
+    expect(build({ opacity: [{ at: 0, value: 3 }] })).toThrow(/value must be between 0 and 1/);
+    expect(build({ opacity: [{ at: 0, value: 1, ease: 'bounce' }] })).toThrow(/ease must be one of/);
+    expect(build({ opacity: { at: 0 } })).toThrow(/must be a list/);
   });
 });

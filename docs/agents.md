@@ -16,7 +16,9 @@ videdit transcribe <folder>    # word-timed transcripts of the speech, made loca
 `info` scans the folder up to three levels deep and registers every video,
 audio and image file it finds. It skips `exports/`, `.videdit/` and dot
 folders. Each asset gets an ID, a kind, a duration in seconds and dimensions.
-Thumbnails and waveforms (for audio files and the sound of video files) are generated with FFmpeg.
+Thumbnails, filmstrips (a sprite of frames every 2 s, at most 60, for videos)
+and waveforms (for audio files and the sound of video files) are generated
+with FFmpeg.
 
 ### Transcripts
 
@@ -82,6 +84,7 @@ kept.
 | `at` | Timeline position in seconds. If omitted, the clip goes after the previous clip on that track |
 | `in` / `out` | Source in and out points in seconds (default: the whole file) |
 | `duration` | Length in seconds, as an alternative to `out`. Required for images and text unless the default of 5 s or 3 s is fine |
+| `speed` | Video and audio: 0.25–4 (default 1). The clip plays `in`→`out` at that speed, so it lasts (out − in) / speed on the timeline; `duration` is then the timeline length. Sound keeps its pitch |
 | `volume` | 0–2, where 1 = 100% |
 | `muted` | `true` turns off a video clip's own sound. To fade or trim a video's sound separately, mute the video and place the same asset, with the same `in`/`out`, on an `A` track |
 | `fadeIn` / `fadeOut` | Seconds. Visuals fade their picture, audio fades its volume, and a video clip fades both |
@@ -93,6 +96,7 @@ kept.
 | `transition` | `{ type, duration }`, where duration is in seconds (default 0.5). It enters from the clip that ends where this one starts on the same track, and that clip keeps playing underneath. A clip with no neighbour fades or slides in over the tracks below it. Types: `fade`, `dipBlack`, `dipWhite`, `slide`, `whip`, `wipe`, `zoom` |
 | `style` | For text: `preset` (`title`, `caption`, `lowerThird`), `fontSize`, `color`, `background`, `x`, `y` (0–1), and `animation` (`none`, `fade`, `rise`, `pop`, `slam`, `typewriter`) |
 | `snap` | `true` or `false`: move `in`/`out` into nearby silence (see below). Overrides the timeline and file setting |
+| `keyframes` | Animation, per property: `{ "opacity": [{ "at": 0, "value": 0 }, { "at": 1, "value": 1, "ease": "easeOut" }] }`. `at` is seconds from the clip's start (inside the clip), `ease` shapes the move to the next key (`linear`, `easeIn`, `easeOut`, `easeInOut`, `hold`). Video and images animate `opacity`, `scale`, `offsetX`, `offsetY` and `rotation` (video also `volume`); text animates `opacity`, `scale` and `rotation`; audio animates `volume`. A property with keys ignores its static value. Bad keys stop the cut with a message naming the clip |
 
 **Placement overwrites.** A clip placed over an existing clip on the same
 track carves out that range. Put overlays on higher tracks instead of on top
@@ -125,6 +129,21 @@ range at a vertical size and position (larger, at y = 0.7). Without it, the
 short keeps cropped copies of the main cut's captions. The words appear as
 lines of 3–4 words. A new line starts after punctuation or at a pause of
 140 ms or more, and the word being spoken takes the theme's highlight colour.
+
+**Caption looks.** The caption style also takes `captionLook`, how the words
+animate: `classic` (the default: the whole line, the spoken word in the
+accent colour), `karaoke` (words fill with the accent colour as they are
+spoken), `pop` (each word scales in as it is spoken), `bounce` (the spoken
+word hops up), `typewriter` (letters type on with the speech), `highlight` (a
+box in the accent colour behind the spoken word) or `oneWord` (one big word at
+a time). `wordsPerLine` (1–6, default 4) sets the longest line, and
+`highlight` is the accent colour. `"position": "top" | "middle" | "bottom"`
+next to `style` places the lines inside the platform safe area for the frame
+shape (on 9:16, bottom is y = 0.7 and top is y = 0.2), overriding `style.y`:
+
+```json
+"captions": { "track": "V3", "position": "bottom", "style": { "captionLook": "karaoke", "wordsPerLine": 3, "highlight": "#ffd84d" } }
+```
 
 **Snapping cuts to silence.** With `"snap": true` (on the file, a timeline or
 a clip), each `in` and `out` point moves to the frame boundary that lands in
@@ -216,6 +235,8 @@ overwrite operations keep the words aligned.
 
 ```bash
 videdit render <folder> --timeline Short --preset mp4-1080p   # → <folder>/exports/
+videdit render <folder> --from 12.5 --to 1:05                 # only that part (--to is where it ends)
+videdit render <folder> --still 0:42                          # the frame at 0:42 as a PNG
 videdit push <folder>                                         # edit + view links
 videdit publish <folder> --timeline Main --title "…"          # render locally + public watch page
 ```
@@ -239,6 +260,8 @@ the project (the latest render of each, longest first, with `Main` shown as
 - The first 3 seconds give a reason to keep watching.
 - No shot lingers without purpose. B-roll changes roughly every 2–4 seconds.
 - Music sits under the dialogue (around 0.25–0.4 volume) and fades out at the end.
+  To dip it only while someone speaks, give the music clip `volume` keyframes,
+  or ask the person to use Duck under speech on the music track in the editor.
 - Text stays out of the speaker's face and inside the safe area. On vertical
   timelines, keep captions at y ≈ 0.65–0.8 so the platform's buttons and
   description do not cover them.

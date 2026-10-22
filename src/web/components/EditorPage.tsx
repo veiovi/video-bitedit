@@ -6,19 +6,31 @@ import { readDraft } from '../drafts';
 import { SKINS, applySkin, currentSkin } from '../skins';
 import {
   activeTimeline,
+  addMarkerAtPlayhead,
+  addRangeMarker,
+  clearMarks,
+  copyAttributes,
   copySelection,
+  cutMarkedRange,
   cutSelection,
   deleteSelection,
   duplicateSelection,
+  freezeAtPlayhead,
+  markInAtPlayhead,
+  markOutAtPlayhead,
   nudgeSelection,
+  pasteAttributesToSelection,
   pasteClipboard,
+  playMarkedRange,
   rippleScope,
   seekEdit,
   toggleEnabledSelection,
   toggleLoop,
+  trimSelectionToPlayhead,
   useEditor,
   zoomToFit,
 } from '../store';
+import { toggleKeyAtPlayhead } from '../keyframing';
 import { startSync } from '../sync';
 import { CommentsPanel } from './Comments';
 import { WorkspaceCard, useWorkspace } from './KeyBox';
@@ -29,9 +41,11 @@ import { MediaBin } from './MediaBin';
 import { Preview } from './Preview';
 import { ReplaceDialog } from './ReplaceDialog';
 import { TimelineView } from './TimelineView';
+import { TranscriptPanel } from './TranscriptPanel';
+import { CommandPalette, openPalette } from './CommandPalette';
 import { HelpButton, HelpTip } from './Help';
 
-type MobilePanel = 'media' | 'inspector' | 'comments' | 'history' | 'export';
+type MobilePanel = 'media' | 'inspector' | 'transcript' | 'comments' | 'history' | 'export';
 
 function SkinPicker() {
   const [skin, setSkin] = useState(currentSkin);
@@ -264,7 +278,14 @@ function useKeyboard() {
         return;
       }
       if (mod && key === 'y') return void (e.preventDefault(), s.redo());
-      // CapCut's split: ⌘B splits the selection (or every track) at the playhead; ⇧⌘B splits every track.
+      // ⌥⌘C / ⌥⌘V copy a clip's look and paste it onto the selection. Matched by physical key, since ⌥ changes e.key on a Mac.
+      if (mod && e.altKey && (e.code === 'KeyC' || e.code === 'KeyV')) {
+        e.preventDefault();
+        if (e.code === 'KeyC') copyAttributes();
+        else pasteAttributesToSelection();
+        return;
+      }
+      // Split: ⌘B splits the selection (or every track) at the playhead; ⇧⌘B splits every track.
       if (mod && key === 'b') {
         e.preventDefault();
         s.applyTimeline((tl) => splitAt(tl, s.playhead, !e.shiftKey && s.selection.length ? s.selection : undefined));
@@ -286,11 +307,33 @@ function useKeyboard() {
       if (mod && key === 'v' && s.clipboard?.length) return void (e.preventDefault(), pasteClipboard());
       if (mod && key === 'd') return void (e.preventDefault(), duplicateSelection());
       if (mod) return;
+      // ⌥[ / ⌥] (or ⇧[ / ⇧]) trim the selected clips' start or end to the playhead.
+      if ((e.altKey || e.shiftKey) && (e.code === 'BracketLeft' || e.code === 'BracketRight')) {
+        e.preventDefault();
+        trimSelectionToPlayhead(e.code === 'BracketLeft' ? 'start' : 'end');
+        return;
+      }
+      if (e.shiftKey && e.code === 'KeyF') {
+        e.preventDefault();
+        freezeAtPlayhead();
+        return;
+      }
+      // ⌥X clears the in and out points; ⌥M adds a range marker. Matched by physical key, since ⌥ changes e.key on a Mac.
+      if (e.altKey && (e.code === 'KeyX' || e.code === 'KeyM')) {
+        e.preventDefault();
+        if (e.code === 'KeyX') clearMarks();
+        else addRangeMarker();
+        return;
+      }
       switch (key) {
         case ' ':
         case 'k':
           e.preventDefault();
           shuttle = 0;
+          if (key === ' ' && e.shiftKey) {
+            playMarkedRange();
+            break;
+          }
           useEditor.setState({ playbackRate: 1 });
           if (key === 'k') player?.pause();
           else player?.toggle();
@@ -342,12 +385,21 @@ function useKeyboard() {
         case 's':
           s.applyTimeline((tl) => splitAt(tl, s.playhead, s.selection.length ? s.selection : undefined));
           break;
+        case 'i':
+          markInAtPlayhead();
+          break;
+        case 'o':
+          markOutAtPlayhead();
+          break;
         case 'x':
-          deleteSelection('ripple');
+          // ⇧X extracts the in/out range when one is set.
+          if (!(e.shiftKey && cutMarkedRange('extract'))) deleteSelection('ripple');
           break;
         case 'z':
-          if (e.shiftKey) zoomToFit();
-          else deleteSelection('lift');
+          // ⇧Z lifts the in/out range when one is set, and otherwise fits the timeline to the window.
+          if (e.shiftKey) {
+            if (!cutMarkedRange('lift')) zoomToFit();
+          } else deleteSelection('lift');
           break;
         case 'delete':
         case 'backspace':
@@ -370,6 +422,10 @@ function useKeyboard() {
           if (side === 'left' && onMain.length && s.ripple) s.seek(Math.min(...picked.map((c) => c.start)));
           break;
         }
+        case ';':
+          // Add or remove a keyframe at the playhead on the selected clip.
+          toggleKeyAtPlayhead();
+          break;
         case '[':
           useEditor.setState({ tool: s.tool === 'backward' ? 'select' : 'backward' });
           break;
@@ -396,10 +452,7 @@ function useKeyboard() {
           zoomToFit();
           break;
         case 'm':
-          s.applyTimeline((tl) => ({
-            ...tl,
-            markers: [...tl.markers, { id: newId(), frame: s.playhead, label: `Marker ${tl.markers.length + 1}` }],
-          }));
+          addMarkerAtPlayhead();
           break;
         case 'b':
         case 'c':
@@ -511,6 +564,9 @@ export function EditorPage({ projectId }: { projectId: string }) {
           </span>
           <HelpTip id="save" />
           <span className="mode-tag">{server?.mode === 'local' ? 'Local' : 'Cloud'}</span>
+          <button className="palette-btn" onClick={openPalette} title="Command palette (⌘K)">
+            ⌘K
+          </button>
           <HelpButton />
           <button onClick={() => setSharing(true)}>Share</button>
           {canEdit && (
@@ -538,15 +594,16 @@ export function EditorPage({ projectId }: { projectId: string }) {
       <aside className="panel side">
         <div className="panel-head tabs">
           <span className="panel-num">03</span>
-          {(['inspector', 'comments', 'history', 'export'] as const).map((p) => (
+          {(['inspector', 'transcript', 'comments', 'history', 'export'] as const).map((p) => (
             <button key={p} className={`tab ${panel === p ? 'on' : ''}`} onClick={() => openPanel(p)}>
-              {p === 'inspector' ? 'Inspector' : p === 'comments' ? `Comments${timelineComments.length ? ` ${timelineComments.length}` : ''}` : p === 'history' ? 'History' : 'Export'}
+              {p === 'inspector' ? 'Inspector' : p === 'transcript' ? 'Transcript' : p === 'comments' ? `Comments${timelineComments.length ? ` ${timelineComments.length}` : ''}` : p === 'history' ? 'History' : 'Export'}
             </button>
           ))}
           <HelpTip id="side" />
         </div>
         <div className="side-body">
           {panel === 'inspector' && <InspectorPanel />}
+          {panel === 'transcript' && <TranscriptPanel />}
           {panel === 'comments' && <CommentsPanel comments={comments} reload={loadComments} />}
           {panel === 'history' && <HistoryPanel />}
           {panel === 'export' && <ExportPanel />}
@@ -556,22 +613,23 @@ export function EditorPage({ projectId }: { projectId: string }) {
       <TimelineView comments={timelineComments} />
 
       <nav className="mobile-tabs">
-        {(['media', 'inspector', 'comments', 'history', 'export'] as const).map((p) => (
+        {(['media', 'inspector', 'transcript', 'comments', 'history', 'export'] as const).map((p) => (
           <button
             key={p}
             className={mobile === p ? 'on' : ''}
             onClick={() => (p === 'media' ? setMobile('media') : openPanel(p))}
           >
-            {p === 'media' ? 'Media' : p === 'inspector' ? 'Edit' : p === 'comments' ? 'Notes' : p === 'history' ? 'History' : 'Export'}
+            {p === 'media' ? 'Media' : p === 'inspector' ? 'Edit' : p === 'transcript' ? 'Text' : p === 'comments' ? 'Notes' : p === 'history' ? 'History' : 'Export'}
           </button>
         ))}
       </nav>
 
       {sharing && <ShareDialog onClose={() => setSharing(false)} />}
       <ReplaceDialog />
+      <CommandPalette />
       {toast && <div className="toast">{toast}</div>}
     </div>
   );
 }
 
-type EditorPanel = 'inspector' | 'comments' | 'history' | 'export';
+type EditorPanel = 'inspector' | 'transcript' | 'comments' | 'history' | 'export';
