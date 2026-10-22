@@ -103,7 +103,13 @@ below.
 - Fade knobs on each clip's top corners: drag them in to fade in or out.
 - A volume line on audio clips: drag it up or down (⇧ for fine steps),
   double-click for 100%.
-- Thumbnails, filmstrips, and waveforms on audio clips and under video clips.
+- Filmstrips along video clips (real frames for the part each clip plays),
+  waveforms on audio clips and under video clips, and skimming: move the
+  mouse across a video in the media bin to scrub through it.
+- Edit by text: the Transcript tab shows the speech as paragraphs. Click a
+  word to jump there, select a run and press ⌫ to cut it from every track;
+  cut words stay visible, struck through, and come back with a click.
+- A command palette (⌘K) for every command, marker, clip and help topic.
   Detach audio moves a video clip's sound to its own clip on an audio track,
   to trim, move and fade it separately.
 
@@ -125,7 +131,9 @@ below.
 
 **Short-form**
 - Local word-timed transcription (whisper.cpp or OpenAI Whisper).
-- Caption clips with an active-word highlight.
+- Animated caption looks: classic, karaoke, pop, bounce, typewriter,
+  highlight box and one word at a time, with words per line, a safe-area
+  position and an accent colour. They render the same in preview and export.
 - Cuts snapped to the quietest moment nearby, so words and breaths are not
   clipped.
 - Several timelines share one media bin: a full cut in the footage's own shape
@@ -150,7 +158,8 @@ below.
 **Help built in**
 - A small ? next to every panel, section and dialog explains that part in a
   sentence or two.
-- Help (or the ? key) opens a guide to every feature and keyboard shortcut.
+- Help (or the ? key) opens a guide to every feature and keyboard shortcut,
+  and lists every command in the ⌘K palette.
 
 ## Quick start
 

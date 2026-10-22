@@ -20,7 +20,8 @@ The model lives in `src/shared/project.ts`.
   gain for sound.
 - **Caption clip**: `kind: 'caption'` with `words: [{ text, start, end }]` in
   frames relative to the clip's start, and `text` for the look (the theme's
-  caption preset plus `highlight`). Edits that move a clip's head (trim,
+  caption preset plus `highlight`, the accent colour, `captionLook` and
+  `wordsPerLine`; see Preview and render). Edits that move a clip's head (trim,
   split, overwrite, `cropRange`) shift and clip its words, just as they move
   `in` for media.
 - **Transcript** (`src/shared/captions.ts`): an asset sidecar,
@@ -29,6 +30,17 @@ The model lives in `src/shared/project.ts`.
   Whisper locally on a 16 kHz mono extract. `captionClipsFor` maps
   transcript words into the media clips of a timeline, which is how cut lists
   generate captions.
+- **Asset filmstrip**: videos carry `filmstrip: { frames, every, width, height }`,
+  describing a JPEG sprite of `frames` frames side by side, frame i showing
+  the source at i × `every` seconds, each `width` × `height` pixels
+  (`filmstripPlan`: a frame every 2 s, at most 60, 160 px wide). Locally,
+  FFmpeg makes it at import (`fps` and `tile` filters), and videos imported
+  earlier get one in the background when the editor opens the project. Cloud
+  uploads draw it in the browser by seeking a `<video>` into a canvas. The
+  timeline draws, along each video clip, the frames for the part of the
+  source it shows at the current zoom (falling back to the tiled thumbnail),
+  and the media bin uses the same sprite when the mouse skims across a card
+  (a muted `<video>` when there is no sprite; nothing on touch).
 - **Edits** are pure functions in `src/shared/edits.ts`. Placement overwrites:
   a placed clip carves out the range it lands on. Split, trim, ripple delete,
   `deriveTimeline` (format conversion with crop to fill) and `cropRange`
@@ -83,6 +95,26 @@ The model lives in `src/shared/project.ts`.
     (`loopRange`) or the whole timeline: the player loops the timeline, and
     leaving the selection while playing seeks back to its start (its end when
     playing backwards). The ruler shades the looped stretch.
+  - **Text-based editing.** The Transcript tab shows the timeline's speech
+    as paragraphs (a new one after a pause of more than 1 s). `timelineTranscript`
+    (`src/shared/transcript.ts`) maps each audible media clip's transcript
+    words through its start and in-point, and uses caption clips' words where
+    no transcribed media plays. Clicking a word seeks; the word under the
+    playhead is underlined. Dragging or ⇧-clicking selects a run, shaded on
+    the ruler, and ⌫ (or Cut) removes those frames from every unlocked track
+    in one undo step (`cutRange`, built on `closeRange`). Speech a cut removed
+    shows struck through at the cut: wherever two neighbouring clips of one
+    file skip part of the source, its words are listed there. Clicking a
+    struck run undoes the cut when it was the last edit; otherwise it reopens
+    the source (`restoreSourceGap`: everything after moves right on every
+    unlocked track and the clips before the cut play on). Caption clips over
+    a restored stretch are not regenerated.
+  - **Command palette.** ⌘K (Ctrl+K) searches every editor command, the
+    timeline's markers, the media bin ("Add to timeline") and the Help topics
+    with a fuzzy match (`src/shared/fuzzy.ts`). The commands come from one
+    registry, `src/web/commands.ts`, which the Help panel also lists with
+    their shortcuts; `components/CommandPalette.tsx` maps each command ID to
+    the store action it runs.
   - **Gaps and files.** Clicking an empty stretch of the main track
     (when the magnet is off) selects it (`gapAt`), and Delete closes it.
     Overlay and audio tracks are free placement, so their gaps are never
@@ -99,10 +131,16 @@ media element loads. Rendering ignores premounting. `src/node/render.ts` bundles
 renders with `@remotion/renderer` (headless Chrome + FFmpeg). Draft presets
 downscale through `renderMedia({ scale })`, so the layout is identical at
 every size. Caption clips are drawn by `chunkCaptions`. It groups words into
-lines of up to four, balancing longer phrases (5 → 3 + 2). A line breaks after
+lines of up to `wordsPerLine` (default four, one for the one-word look),
+balancing longer phrases (5 → 3 + 2). A line breaks after
 punctuation and at pauses of 140 ms or more, rounded to whole frames. It
 stays up until the next line starts, or 0.6 s after its last word. The word
-being spoken is the last one whose start has passed. Title fonts are bundled through `@fontsource`, and the
+being spoken is the last one whose start has passed. Each line is drawn in
+the clip's caption look (`src/shared/captionLooks.ts`: classic, karaoke, pop,
+bounce, typewriter, highlight box, one word): `wordLooks` gives every word's
+opacity, scale, lift, accent, fill and box as a pure function of the frame,
+and `src/remotion/CaptionLine.tsx` draws it. The inspector's look picker
+previews each look with that same component. Title fonts are bundled through `@fontsource`, and the
 composition holds rendering until they have loaded.
 
 ## Effects, transitions and AI images
@@ -142,7 +180,8 @@ one it is talking to. `GET /api/health` reports `mode: 'local' | 'cloud'`.
 | `POST /api/p/:id/assets` → `PUT …/parts/:n` → `POST …/complete` | Chunked upload in 16 MB parts, under the Worker's 100 MB request limit |
 | `PUT …/assets/:aid/thumb`, `…/peaks` | Thumbnail JPEG and waveform peaks (50 values per second, 0–255) |
 | `PUT …/assets/:aid/transcript` | Word-timed transcript JSON (edit access) |
-| `GET /m/:id/a/:aid[/thumb\|/peaks\|/transcript]` | Media with Range support, and its side files |
+| `PUT …/assets/:aid/filmstrip?frames=&every=&width=&height=` | Filmstrip sprite JPEG for a video; returns the asset with `filmstrip` set. The local server makes its own with FFmpeg and ignores it |
+| `GET /m/:id/a/:aid[/thumb\|/peaks\|/transcript\|/filmstrip]` | Media with Range support, and its side files |
 | `GET/POST/PATCH/DELETE /api/p/:id/comments` | Timecoded comments. Anyone with the link may post |
 | `POST /api/p/:id/renders` | Queue a render `{ preset, timelineId, publish?, title?, description? }` |
 | `POST /api/p/:id/renders/:rid/publish` | Publish a finished render |
@@ -152,14 +191,15 @@ one it is talking to. `GET /api/health` reports `mode: 'local' | 'cloud'`.
 
 **Cloud** (`src/worker/index.ts`): D1 tables `projects`, `assets`, `renders`
 and `comments` (`migrations/`). R2 keys are `p/<project>/a/<asset>/source`,
-`thumb.jpg`, `peaks.json`, `transcript.json` and
-`p/<project>/r/<render>/output.mp4`. Static
+`thumb.jpg`, `filmstrip.jpg`, `peaks.json`, `transcript.json` and
+`p/<project>/r/<render>/output.mp4`. The filmstrip's layout is JSON in
+`assets.filmstrip` (migration 0003). Static
 assets are served by Workers Assets. `/api/*`, `/m/*` and `/w/*` run the
 Worker first.
 
 **Local** (`src/node/local-server.ts`): one project folder.
 - `videdit.json` holds the doc and assets.
-- `.videdit/` holds thumbnails, peaks (for every audio and video file; `[]`
+- `.videdit/` holds thumbnails, filmstrips (`thumbs/<assetId>.filmstrip.jpg`), peaks (for every audio and video file; `[]`
   when a video has no sound, and made on first request for older imports),
   transcripts (`transcripts/<assetId>.json`),
   comments, renders and the cloud link (`remote.json`, which includes the
