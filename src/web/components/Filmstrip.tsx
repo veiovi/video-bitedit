@@ -3,7 +3,7 @@
 // media bin card.
 
 import { useEffect, useRef, useState } from 'react';
-import { type Asset, type Clip, type Filmstrip, filmstripFrame } from '../../shared/project';
+import { type Asset, type Clip, type Filmstrip, clipSpeed, filmstripFrame } from '../../shared/project';
 import { filmstripUrl, mediaUrl } from '../api';
 
 /** Height of the picture strip inside a video clip on the timeline. */
@@ -38,7 +38,8 @@ export function ClipFrames({ clip, asset, projectId, px, fps, thumb }: { clip: C
   for (let i = 0; i < count; i++) {
     // Each tile shows the source under its centre.
     const frameInClip = Math.min(clip.duration, (i * spacing + tileW / 2) / px);
-    const seconds = ((clip.in ?? 0) + frameInClip) / fps;
+    // Source frames run at the clip's speed; a still shows its one frame throughout.
+    const seconds = ((clip.in ?? 0) + (clip.freeze ? 0 : frameInClip * clipSpeed(clip))) / fps;
     tiles.push(<div key={i} className="clip-frame" style={{ left: i * spacing, width: tileW, ...spriteFrame(url, strip, filmstripFrame(strip, seconds)) }} />);
   }
   return <div className="clip-thumb clip-frames">{tiles}</div>;

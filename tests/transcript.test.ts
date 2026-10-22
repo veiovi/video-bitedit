@@ -35,6 +35,15 @@ describe('timeline transcript', () => {
     expect(cut).toMatchObject({ at: 60, frames: 60, clipIds: [t.clips[0].id] });
   });
 
+  it('follows clip speed for words and cuts', () => {
+    // At 2× the clip plays source frames 0–300 in 150 timeline frames: one word every 15 frames.
+    const t = cutRange(withClips(clip('x', 0, 150, { speed: 2 })), 30, 60);
+    expect(texts(t)).toEqual(['w0', 'w1', '~w2 w3~', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9']);
+    const cut = flat(t).find((i) => i.type === 'cut') as TranscriptCutItem;
+    // The cut removed 60 source frames, which is 30 frames on the timeline at 2×.
+    expect(cut).toMatchObject({ at: 30, frames: 30 });
+  });
+
   it('counts a video and its detached audio once', () => {
     let t = cutRange(withClips(clip('x', 0, 150)), 30, 60);
     t = detachAudio(t, t.clips.map((c) => c.id));

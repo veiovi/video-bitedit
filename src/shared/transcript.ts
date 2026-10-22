@@ -8,7 +8,7 @@
 
 import type { Transcript } from './captions';
 import { clipWords } from './captions';
-import { type Clip, type Timeline, clipEnd } from './project';
+import { type Clip, type Timeline, clipEnd, clipSpeed } from './project';
 
 export interface TranscriptWordItem {
   type: 'word';
@@ -92,8 +92,10 @@ export function timelineTranscript(
   const cuts = new Map<string, TranscriptCutItem & { heard: boolean }>();
   for (const a of all) {
     const b = all.find((x) => x.trackId === a.trackId && x.assetId === a.assetId && x.start === clipEnd(a));
-    if (!b) continue;
-    const from = (a.in ?? 0) + a.duration;
+    // Both sides must play the source at one speed (and neither be a still) for the skipped part to be a cut.
+    if (!b || a.freeze || b.freeze || clipSpeed(a) !== clipSpeed(b)) continue;
+    const speed = clipSpeed(a);
+    const from = (a.in ?? 0) + Math.round(a.duration * speed);
     const to = b.in ?? 0;
     if (to <= from) continue;
     const removed = transcripts[a.assetId!].words.filter((w) => {
@@ -107,7 +109,7 @@ export function timelineTranscript(
     if (known) {
       known.clipIds.push(a.id);
       known.heard ||= heard;
-    } else cuts.set(key, { type: 'cut', words: removed.map((w) => w.text), at: b.start, frames: to - from, clipIds: [a.id], heard });
+    } else cuts.set(key, { type: 'cut', words: removed.map((w) => w.text), at: b.start, frames: Math.round((to - from) / speed), clipIds: [a.id], heard });
   }
   const heardCuts: TranscriptCutItem[] = [...cuts.values()].filter((c) => c.heard).map(({ heard: _h, ...c }) => c);
 
