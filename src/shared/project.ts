@@ -181,7 +181,30 @@ export interface Clip {
   speed?: number;
   /** Video clips: a still of the source frame at `in`, held for the clip's whole length, without sound. */
   freeze?: boolean;
+  /**
+   * Animation: per property, keys in frames relative to the clip's start
+   * (see shared/keyframes.ts). A property with keys ignores its static value.
+   */
+  keyframes?: Keyframes;
 }
+
+/** Clip properties that can be animated with keyframes. */
+export type KeyframeProp = 'opacity' | 'scale' | 'offsetX' | 'offsetY' | 'rotation' | 'volume';
+
+/** How the value travels from a key to the next one. `hold` keeps it until the next key. */
+export type KeyframeEase = 'linear' | 'hold' | 'easeIn' | 'easeOut' | 'easeInOut';
+
+export interface Keyframe {
+  /** Frames from the clip's start, 0 to duration − 1. */
+  frame: number;
+  value: number;
+  /** The shape of the span after this key; linear when unset. */
+  ease?: KeyframeEase;
+  /** Set on volume keys written by Duck under speech, so Remove ducking can find them. */
+  duck?: true;
+}
+
+export type Keyframes = Partial<Record<KeyframeProp, Keyframe[]>>;
 
 export const SPEED_LIMITS = { min: 0.25, max: 4 } as const;
 export const SPEED_PRESETS = [0.25, 0.5, 1, 1.5, 2, 4] as const;

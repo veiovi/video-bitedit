@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { addClip, addTrack, adjacentEditPoint, boundaryNear, canReplace, clipAttributes, clipsFrom, closeGaps, closeRange, cropRange, cutRange, cutRanges, deleteClips, deleteSide, deriveTimeline, detachAudio, freezeFrame, gapAt, insertClip, mainTrackId, MAX_VOLUME, moveClip, moveClips, moveMainClip, pasteAttributes, pasteClips, renameTrack, reorderTrack, replaceClipMedia, replaceProblem, restoreSourceGap, rippleDeleteClips, rippleTrim, rollEdit, setFade, setSpeed, setVolume, slipClip, splitAt, toggleClipsEnabled, trimClip, trimToFrame, updateTrack } from '../src/shared/edits';
 import { clipWords } from '../src/shared/captions';
+import { clearKeyframes, duckClips, moveKeyframe, removeDucking, removeKeyframe, setClipGain, setKeyframe } from '../src/shared/edits';
+import { valueAt } from '../src/shared/keyframes';
+import type { KeyframeProp } from '../src/shared/project';
 import { type Clip, type PublishedVideo, TRACK_LIMITS, type Timeline, aspectLabel, emptyTimeline, framing, parseTimecode, pickVersions, trackColor, withSolo } from '../src/shared/project';
 
 function clip(id: string, start: number, duration: number, extra: Partial<Clip> = {}): Clip {
@@ -909,5 +912,233 @@ describe('text-based cuts', () => {
   it('restoreSourceGap needs a clip ending at the cut', () => {
     const t = withClips(clip('a', 0, 100));
     expect(restoreSourceGap(t, 50, 10, ['a'])).toBe(t);
+  });
+});
+
+describe('keyframes', () => {
+  const keys = (t: Timeline, id: string, prop: KeyframeProp = 'opacity') =>
+    (t.clips.find((c) => c.id === id)?.keyframes?.[prop] ?? []).map((k) => [k.frame, k.value, k.ease ?? 'linear']);
+  const curve = (t: Timeline, id: string, prop: KeyframeProp = 'opacity') => {
+    const c = t.clips.find((x) => x.id === id)!;
+    return Array.from({ length: c.duration }, (_, i) => Math.round(valueAt(c, prop, i) * 1e6) / 1e6);
+  };
+  /** Opacity 0 at frame 10, 1 at frame 50 and 0.5 at frame 90 of a 100-frame clip. */
+  const animated = (extra: Partial<Clip> = {}) =>
+    withClips(
+      clip('a', 0, 100, {
+        keyframes: {
+          opacity: [
+            { frame: 10, value: 0 },
+            { frame: 50, value: 1 },
+            { frame: 90, value: 0.5 },
+          ],
+        },
+        ...extra,
+      }),
+    );
+
+  it('setKeyframe adds keys in order and replaces the key at the same frame, keeping its ease', () => {
+    let t = withClips(clip('a', 0, 100));
+    t = setKeyframe(t, 'a', 'opacity', 40, 1);
+    t = setKeyframe(t, 'a', 'opacity', 10, 0, 'easeIn');
+    expect(keys(t, 'a')).toEqual([
+      [10, 0, 'easeIn'],
+      [40, 1, 'linear'],
+    ]);
+    t = setKeyframe(t, 'a', 'opacity', 10, 0.25);
+    expect(keys(t, 'a')).toEqual([
+      [10, 0.25, 'easeIn'],
+      [40, 1, 'linear'],
+    ]);
+    t = setKeyframe(t, 'a', 'opacity', 10, 0.25, 'linear');
+    expect(keys(t, 'a')[0]).toEqual([10, 0.25, 'linear']);
+  });
+
+  it('setKeyframe keeps frames inside the clip and values in range', () => {
+    let t = withClips(clip('a', 0, 100));
+    t = setKeyframe(t, 'a', 'opacity', 500, 3);
+    t = setKeyframe(t, 'a', 'volume', -20, 9);
+    expect(keys(t, 'a')).toEqual([[99, 1, 'linear']]);
+    expect(keys(t, 'a', 'volume')).toEqual([[0, MAX_VOLUME, 'linear']]);
+  });
+
+  it('setKeyframe ignores properties a clip cannot animate and locked tracks', () => {
+    const t = withClips(clip('s', 0, 50, { kind: 'audio', trackId: 'a1' }));
+    expect(setKeyframe(t, 's', 'opacity', 0, 0.5)).toBe(t);
+    const locked = updateTrack(withClips(clip('a', 0, 50)), 'v1', { locked: true });
+    expect(setKeyframe(locked, 'a', 'opacity', 0, 0.5)).toBe(locked);
+  });
+
+  it('removeKeyframe, moveKeyframe and clearKeyframes', () => {
+    let t = animated();
+    t = removeKeyframe(t, 'a', 'opacity', 50);
+    expect(keys(t, 'a').map((k) => k[0])).toEqual([10, 90]);
+    t = moveKeyframe(t, 'a', 'opacity', 10, 300);
+    expect(keys(t, 'a')).toEqual([
+      [90, 0.5, 'linear'],
+      [99, 0, 'linear'],
+    ]);
+    t = moveKeyframe(animated(), 'a', 'opacity', 10, 60);
+    expect(keys(t, 'a').map((k) => k[0])).toEqual([50, 60, 90]);
+    // Clearing leaves the value at the given frame as the static value.
+    t = clearKeyframes(animated(), 'a', 'opacity', 50);
+    const c = t.clips[0];
+    expect(c.keyframes).toBeUndefined();
+    expect(c.opacity).toBe(1);
+  });
+
+  it('a head trim shifts the keys and keeps the curve inside the clip', () => {
+    const before = curve(animated(), 'a');
+    const t = trimClip(animated(), 'a', 'start', 30);
+    expect(keys(t, 'a')).toEqual([
+      [0, 0.5, 'linear'],
+      [20, 1, 'linear'],
+      [60, 0.5, 'linear'],
+    ]);
+    expect(curve(t, 'a')).toEqual(before.slice(30));
+  });
+
+  it('an end trim drops keys past the new end after adding one at the last frame', () => {
+    const before = curve(animated(), 'a');
+    const t = trimClip(animated(), 'a', 'end', 70);
+    expect(keys(t, 'a').map((k) => k[0])).toEqual([10, 50, 69]);
+    expect(curve(t, 'a')).toEqual(before.slice(0, 70));
+  });
+
+  it('hold spans stay exact across a trim', () => {
+    let t = withClips(clip('a', 0, 100));
+    t = setKeyframe(t, 'a', 'scale', 0, 1, 'hold');
+    t = setKeyframe(t, 'a', 'scale', 60, 2);
+    const before = curve(t, 'a', 'scale');
+    const trimmed = trimClip(t, 'a', 'start', 20);
+    expect(curve(trimmed, 'a', 'scale')).toEqual(before.slice(20));
+    expect(keys(trimmed, 'a', 'scale')[0]).toEqual([0, 1, 'hold']);
+  });
+
+  it('split gives each half its keys plus a key at the cut, so values run on', () => {
+    const before = curve(animated(), 'a');
+    const t = splitAt(animated(), 30);
+    const [left, right] = t.clips;
+    expect(keys(t, left.id).map((k) => k[0])).toEqual([10, 29]);
+    expect(keys(t, right.id).map((k) => k[0])).toEqual([0, 20, 60]);
+    expect([...curve(t, left.id), ...curve(t, right.id)]).toEqual(before);
+  });
+
+  it('overwriting the middle of a clip cuts its keys like a split', () => {
+    const before = curve(animated(), 'a');
+    const t = addClip(animated(), clip('b', 40, 20, { in: 500 }));
+    const tail = t.clips.find((c) => c.start === 60)!;
+    expect(curve(t, 'a')).toEqual(before.slice(0, 40));
+    expect(curve(t, tail.id)).toEqual(before.slice(60));
+  });
+
+  it('speed scales the keys with the clip length', () => {
+    const t = setSpeed(animated(), 'a', 2);
+    expect(t.clips[0].duration).toBe(50);
+    expect(keys(t, 'a').map((k) => k[0])).toEqual([5, 25, 45]);
+    const slow = setSpeed(animated(), 'a', 0.5);
+    expect(keys(slow, 'a').map((k) => k[0])).toEqual([20, 100, 180]);
+  });
+
+  it('speed limited by the source drops the keys past the end', () => {
+    const t = setSpeed(animated(), 'a', 0.5, () => 60);
+    expect(t.clips[0].duration).toBe(120);
+    expect(keys(t, 'a').map((k) => k[0])).toEqual([20, 100, 119]);
+  });
+
+  it('a ripple head trim shifts keys like a plain one', () => {
+    const t = rippleTrim(animated(), 'a', 'start', 30);
+    expect(t.clips[0].start).toBe(0);
+    expect(keys(t, 'a').map((k) => k[0])).toEqual([0, 20, 60]);
+  });
+
+  it('a roll shortens one side and head-trims the other, both keeping their curves', () => {
+    const left = animated().clips[0];
+    let t = withClips(left, clip('b', 100, 100, { in: 100, keyframes: { scale: [{ frame: 0, value: 1 }, { frame: 40, value: 2 }] } }));
+    const before = curve(t, 'b', 'scale');
+    t = rollEdit(t, 'a', 'b', 80);
+    expect(keys(t, 'a').map((k) => k[0])).toEqual([10, 50, 79]);
+    t = rollEdit(t, 'a', 'b', 120);
+    expect(curve(t, 'b', 'scale')).toEqual(before.slice(20));
+  });
+
+  it('a freeze frame holds the animated values at its frame, without keys', () => {
+    const t = freezeFrame(animated({ keyframes: { opacity: [{ frame: 0, value: 0 }, { frame: 100, value: 1 }], scale: [{ frame: 0, value: 2 }] } }), 'a', 40, 30);
+    const still = t.clips.find((c) => c.freeze)!;
+    expect(still.keyframes).toBeUndefined();
+    expect(still.opacity).toBeCloseTo(0.4);
+    expect(still.scale).toBe(2);
+  });
+
+  it('paste attributes carries keys, cut to the target, and clears keys the copy lacks', () => {
+    const src = animated().clips[0];
+    const attrs = clipAttributes(src);
+    expect(attrs.keyframes?.opacity).toHaveLength(3);
+    let t = withClips(clip('b', 0, 60), clip('c', 100, 100, { trackId: 'v2', keyframes: { opacity: [{ frame: 0, value: 0.2 }] } }));
+    t = pasteAttributes(t, ['b'], attrs);
+    expect(keys(t, 'b').map((k) => k[0])).toEqual([10, 50, 59]);
+    // A copy without keys gives the target the copied static value instead of its old keys.
+    t = pasteAttributes(t, ['c'], clipAttributes(clip('plain', 0, 10, { opacity: 0.7 })));
+    const c = t.clips.find((x) => x.id === 'c')!;
+    expect(c.keyframes).toBeUndefined();
+    expect(c.opacity).toBe(0.7);
+  });
+
+  it('paste attributes keeps pasted keys at their timing when it also changes speed', () => {
+    const attrs = clipAttributes(animated({ speed: 2 }).clips[0]);
+    const t = pasteAttributes(withClips(clip('b', 0, 100)), ['b'], attrs);
+    expect(t.clips[0].duration).toBe(50);
+    expect(keys(t, 'b').map((k) => k[0])).toEqual([10, 49]);
+  });
+
+  it('detach audio moves volume keys to the sound and leaves the picture its own', () => {
+    const t = detachAudio(
+      withClips(clip('a', 0, 100, { keyframes: { volume: [{ frame: 0, value: 0 }, { frame: 20, value: 1 }], opacity: [{ frame: 5, value: 0.5 }] } })),
+      ['a'],
+    );
+    const video = t.clips.find((c) => c.id === 'a')!;
+    const sound = t.clips.find((c) => c.kind === 'audio')!;
+    expect(video.keyframes).toEqual({ opacity: [{ frame: 5, value: 0.5 }] });
+    expect(sound.keyframes?.volume).toEqual([
+      { frame: 0, value: 0 },
+      { frame: 20, value: 1 },
+    ]);
+  });
+
+  it('cropRange keeps the keys inside the range', () => {
+    const before = curve(animated(), 'a');
+    const t = cropRange(animated(), 25, 75);
+    expect(curve(t, 'a')).toEqual(before.slice(25, 75));
+  });
+});
+
+describe('ducking and gain', () => {
+  const music = (extra: Partial<Clip> = {}) => clip('m', 0, 300, { kind: 'audio', trackId: 'a2', ...extra });
+
+  it('duckClips writes tagged volume keys around speech and removeDucking takes them out', () => {
+    let t = withClips(music());
+    t = duckClips(t, ['m'], [{ start: 100, end: 160 }], { depth: -12, attack: 6, release: 12 });
+    const k = t.clips[0].keyframes!.volume!;
+    expect(k.map((x) => x.frame)).toEqual([94, 100, 160, 172]);
+    expect(k.every((x) => x.duck)).toBe(true);
+    expect(k[1].value).toBeCloseTo(0.251, 3);
+    // A hand-set key survives Remove ducking.
+    t = setKeyframe(t, 'm', 'volume', 250, 0.5);
+    t = removeDucking(t, ['m']);
+    expect(t.clips[0].keyframes?.volume).toEqual([{ frame: 250, value: 0.5 }]);
+  });
+
+  it('duckClips leaves clips the speech does not reach alone', () => {
+    const t = withClips(music());
+    expect(duckClips(t, ['m'], [{ start: 400, end: 500 }])).toBe(t);
+  });
+
+  it('setClipGain sets the volume and scales volume keys with it', () => {
+    let t = duckClips(withClips(music({ volume: 0.5 })), ['m'], [{ start: 100, end: 160 }]);
+    t = setClipGain(t, 'm', 1);
+    const c = t.clips[0];
+    expect(c.volume).toBe(1);
+    expect(c.keyframes!.volume![0].value).toBe(1);
+    expect(setClipGain(t, 'm', 9).clips[0].volume).toBe(MAX_VOLUME);
   });
 });
