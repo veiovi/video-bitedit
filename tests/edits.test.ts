@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { addClip, addTrack, adjacentEditPoint, boundaryNear, canReplace, clipsFrom, closeGaps, closeRange, cropRange, deleteClips, deleteSide, deriveTimeline, detachAudio, gapAt, insertClip, mainTrackId, moveClip, moveClips, moveMainClip, pasteClips, replaceClipMedia, replaceProblem, rippleDeleteClips, rippleTrim, setFade, setVolume, MAX_VOLUME, splitAt, toggleClipsEnabled, trimClip } from '../src/shared/edits';
-import { type Clip, type PublishedVideo, TRACK_LIMITS, type Timeline, aspectLabel, emptyTimeline, framing, parseTimecode, pickVersions, withSolo } from '../src/shared/project';
+import { clipAttributes, freezeFrame, pasteAttributes, renameTrack, reorderTrack, rollEdit, setSpeed, slipClip, trimToFrame, updateTrack } from '../src/shared/edits';
+import { clipWords } from '../src/shared/captions';
+import { type Clip, type PublishedVideo, TRACK_LIMITS, type Timeline, aspectLabel, emptyTimeline, framing, parseTimecode, pickVersions, trackColor, withSolo } from '../src/shared/project';
 
 function clip(id: string, start: number, duration: number, extra: Partial<Clip> = {}): Clip {
   return { id, kind: 'video', trackId: 'v1', start, duration, assetId: 'a', in: 0, ...extra };
@@ -514,5 +516,334 @@ describe('main-track magnet', () => {
     expect(order(deleteSide(t, ['b'], 60, 'right', true))).toEqual(['a@0', 'b@50', 'c@60']);
     expect(order(deleteSide(t, ['b'], 60, 'right'))).toEqual(['a@0', 'b@50', 'c@80']);
     expect(deleteSide(t, ['b'], 50, 'left', true)).toBe(t);
+  });
+});
+
+describe('speed', () => {
+  const len = (n: number) => () => n;
+  const one = (t: Timeline, id: string) => {
+    const c = t.clips.find((x) => x.id === id)!;
+    return [c.start, c.duration, c.in, c.speed];
+  };
+
+  it('moves the in-point by source frames when trimming, splitting and overwriting a fast clip', () => {
+    const fast = withClips(clip('a', 0, 100, { in: 10, speed: 2 }));
+    expect(spans(trimClip(fast, 'a', 'start', 20))).toEqual([[20, 100, 50]]);
+    expect(spans(splitAt(fast, 30))).toEqual([
+      [0, 30, 10],
+      [30, 100, 70],
+    ]);
+    expect(spans(addClip(fast, clip('b', 40, 10, { in: 900 })))).toEqual([
+      [0, 40, 10],
+      [40, 50, 900],
+      [50, 100, 110],
+    ]);
+  });
+
+  it('clamps trims to the source at the clip speed', () => {
+    // 2× from in 10 of a 210-frame source: at most 100 timeline frames.
+    const fast = withClips(clip('a', 50, 40, { in: 10, speed: 2 }));
+    expect(spans(trimClip(fast, 'a', 'end', 500, len(210)))).toEqual([[50, 150, 10]]);
+    // Revealing earlier footage stops at the start of the source: 10 source frames = 5 timeline frames.
+    expect(spans(trimClip(fast, 'a', 'start', 0))).toEqual([[45, 90, 0]]);
+    expect(one(rippleTrim(fast, 'a', 'end', 500, len(210)), 'a')).toEqual([50, 100, 10, 2]);
+    expect(one(rippleTrim(fast, 'a', 'start', 0), 'a')).toEqual([50, 45, 0, 2]);
+    // Half speed: 10 source frames reveal 20 timeline frames.
+    const slow = withClips(clip('s', 50, 40, { in: 10, speed: 0.5 }));
+    expect(spans(trimClip(slow, 's', 'start', 0))).toEqual([[30, 90, 0]]);
+  });
+
+  it('scales the length and keeps the in-point', () => {
+    const t = withClips(clip('a', 0, 100, { in: 30 }));
+    expect(one(setSpeed(t, 'a', 2), 'a')).toEqual([0, 50, 30, 2]);
+    expect(one(setSpeed(setSpeed(t, 'a', 2), 'a', 1), 'a')).toEqual([0, 100, 30, undefined]);
+    expect(one(setSpeed(t, 'a', 0.5, len(1000)), 'a')).toEqual([0, 200, 30, 0.5]);
+  });
+
+  it('clamps speed to its limits and the length to the source', () => {
+    const t = withClips(clip('a', 0, 100, { in: 30 }));
+    expect(one(setSpeed(t, 'a', 10), 'a')).toEqual([0, 25, 30, 4]);
+    expect(one(setSpeed(t, 'a', 0.01, len(10_000)), 'a')).toEqual([0, 400, 30, 0.25]);
+    // The clip plays the same source frames at any speed, so a clip that already ran past
+    // the end of its source (100 frames from in 30 of a 100-frame file) is cut back to fit.
+    expect(one(setSpeed(t, 'a', 2, len(100)), 'a')).toEqual([0, 35, 30, 2]);
+  });
+
+  it('keeps fades inside the new length', () => {
+    const t = withClips(clip('a', 0, 100, { fadeIn: 30, fadeOut: 30 }));
+    const c = setSpeed(t, 'a', 4).clips[0];
+    expect([c.duration, c.fadeIn, c.fadeOut]).toEqual([25, 25, 0]);
+  });
+
+  it('leaves locked tracks, stills and text alone', () => {
+    const locked = updateTrack(withClips(clip('a', 0, 100)), 'v1', { locked: true });
+    expect(setSpeed(locked, 'a', 2)).toBe(locked);
+    const img = withClips(clip('i', 0, 100, { kind: 'image', in: undefined }));
+    expect(setSpeed(img, 'i', 2)).toBe(img);
+    const still = withClips(clip('f', 0, 60, { freeze: true }));
+    expect(setSpeed(still, 'f', 2)).toBe(still);
+  });
+
+  it('overwrites what follows without ripple, and ripples with it', () => {
+    const t = withClips(clip('a', 0, 100), clip('b', 100, 50, { in: 500 }), clip('c', 120, 20, { trackId: 'v2' }));
+    // Slower without ripple: the longer clip carves into b.
+    const over = setSpeed(t, 'a', 0.5);
+    expect(spans(over)).toEqual([
+      [0, 200, 0],
+    ]);
+    // With ripple (the magnet on the main track): b and the linked cutaway move right.
+    const rip = setSpeed(t, 'a', 0.5, undefined, {});
+    expect(spans(rip)).toEqual([
+      [0, 200, 0],
+      [200, 250, 500],
+    ]);
+    expect(spans(rip, 'v2')).toEqual([[220, 240, 0]]);
+    // Faster with ripple on V1 only: b closes up, the cutaway stays.
+    const fast = setSpeed(t, 'a', 2, undefined, { onlyTrack: 'v1' });
+    expect(spans(fast)).toEqual([
+      [0, 50, 0],
+      [50, 100, 500],
+    ]);
+    expect(spans(fast, 'v2')).toEqual([[120, 140, 0]]);
+  });
+
+  it('maps transcript words through the clip speed', () => {
+    const words = [{ text: 'hi', start: 2, end: 3 }];
+    // At 30 fps, word at source frames 60–90; clip from in 30 at 2× plays them at 15–30.
+    expect(clipWords(clip('a', 0, 100, { in: 30, speed: 2 }), { words }, 30)).toEqual([{ text: 'hi', start: 15, end: 30 }]);
+    expect(clipWords(clip('f', 0, 100, { in: 60, freeze: true }), { words }, 30)).toEqual([]);
+  });
+
+  it('carries speed to detached sound', () => {
+    const t = detachAudio(withClips(clip('a', 0, 50, { speed: 2 })), ['a']);
+    expect(t.clips.find((c) => c.kind === 'audio')!.speed).toBe(2);
+  });
+});
+
+describe('freeze frame', () => {
+  const caption = (id: string, start: number, duration: number): Clip => ({ id, kind: 'caption', trackId: 'v3', start, duration, words: [] });
+  const still = (t: Timeline) => t.clips.find((c) => c.freeze)!;
+
+  it('inserts a still of the frame under the playhead and ripples', () => {
+    const t = addClip(withClips(clip('a', 0, 100, { in: 20, scale: 1.2 }), clip('b', 100, 50)), caption('cap', 80, 20));
+    const out = freezeFrame(t, 'a', 40, 60, {});
+    expect(spans(out)).toEqual([
+      [0, 40, 20],
+      [40, 100, 60],
+      [100, 160, 60],
+      [160, 210, 0],
+    ]);
+    expect(still(out)).toMatchObject({ kind: 'video', freeze: true, muted: true, scale: 1.2, in: 60, assetId: 'a' });
+    expect(spans(out, 'v3').map((x) => x[0])).toEqual([140]);
+    // Linkage off: only the main track opens.
+    expect(spans(freezeFrame(t, 'a', 40, 60, { onlyTrack: 'v1' }), 'v3').map((x) => x[0])).toEqual([80]);
+  });
+
+  it('takes the source frame at the clip speed', () => {
+    const out = freezeFrame(withClips(clip('a', 0, 100, { in: 10, speed: 2 })), 'a', 30, 60, {});
+    expect(still(out).in).toBe(70);
+  });
+
+  it('overwrites without insert', () => {
+    const out = freezeFrame(withClips(clip('a', 0, 100), clip('b', 100, 50)), 'a', 70, 60);
+    expect(spans(out)).toEqual([
+      [0, 70, 0],
+      [70, 130, 70],
+      [130, 150, 30],
+    ]);
+  });
+
+  it('ignores locked tracks, other kinds and a playhead outside the clip', () => {
+    const t = withClips(clip('a', 0, 100), clip('i', 0, 50, { trackId: 'v2', kind: 'image', in: undefined }));
+    expect(freezeFrame(t, 'a', 100, 60)).toBe(t);
+    expect(freezeFrame(t, 'i', 10, 60)).toBe(t);
+    const locked = updateTrack(t, 'v1', { locked: true });
+    expect(freezeFrame(locked, 'a', 10, 60)).toBe(locked);
+  });
+
+  it('holds its frame through trims, splits and slips', () => {
+    const t = withClips(clip('f', 0, 60, { in: 70, freeze: true, muted: true }));
+    expect(spans(trimClip(t, 'f', 'start', 20))).toEqual([[20, 60, 70]]);
+    expect(spans(splitAt(t, 30))).toEqual([
+      [0, 30, 70],
+      [30, 60, 70],
+    ]);
+    // A still can grow without running out of source.
+    expect(spans(trimClip(t, 'f', 'end', 500, () => 100))).toEqual([[0, 500, 70]]);
+    expect(spans(trimClip(t, 'f', 'start', -50))).toEqual([[0, 60, 70]]);
+    expect(spans(slipClip(t, 'f', 50, () => 100))).toEqual([[0, 60, 99]]);
+  });
+});
+
+describe('roll and slip', () => {
+  const len = (n: number) => () => n;
+
+  it('rolls the cut between touching clips without changing the total', () => {
+    const t = withClips(clip('a', 0, 50, { in: 0 }), clip('b', 50, 50, { in: 100 }));
+    const later = rollEdit(t, 'a', 'b', 60);
+    expect(spans(later)).toEqual([
+      [0, 60, 0],
+      [60, 100, 110],
+    ]);
+    const earlier = rollEdit(t, 'a', 'b', 30);
+    expect(spans(earlier)).toEqual([
+      [0, 30, 0],
+      [30, 100, 80],
+    ]);
+  });
+
+  it('clamps a roll to both sources and keeps a frame on each side', () => {
+    const t = withClips(clip('a', 0, 50, { in: 0 }), clip('b', 50, 50, { in: 10 }));
+    // a's source ends at 55; b can reveal only 10 frames before its in-point.
+    expect(spans(rollEdit(t, 'a', 'b', 90, len(55)))).toEqual([
+      [0, 55, 0],
+      [55, 100, 15],
+    ]);
+    expect(spans(rollEdit(t, 'a', 'b', 0))).toEqual([
+      [0, 40, 0],
+      [40, 100, 0],
+    ]);
+    expect(spans(rollEdit(t, 'a', 'b', 500))).toEqual([
+      [0, 99, 0],
+      [99, 100, 59],
+    ]);
+  });
+
+  it('rolls fast clips by source frames', () => {
+    const t = withClips(clip('a', 0, 50, { in: 0, speed: 2 }), clip('b', 50, 50, { in: 100, speed: 2 }));
+    expect(spans(rollEdit(t, 'a', 'b', 60))).toEqual([
+      [0, 60, 0],
+      [60, 100, 120],
+    ]);
+    // a at 2× uses 2 source frames per frame: a 110-frame source holds 55 frames.
+    expect(spans(rollEdit(t, 'a', 'b', 80, len(110)))[0]).toEqual([0, 55, 0]);
+  });
+
+  it('only rolls touching clips on an unlocked track', () => {
+    const apart = withClips(clip('a', 0, 40), clip('b', 50, 50));
+    expect(rollEdit(apart, 'a', 'b', 45)).toBe(apart);
+    const locked = updateTrack(withClips(clip('a', 0, 50), clip('b', 50, 50)), 'v1', { locked: true });
+    expect(rollEdit(locked, 'a', 'b', 60)).toBe(locked);
+  });
+
+  it('slips the in-point in place, clamped to the source', () => {
+    const t = withClips(clip('a', 20, 50, { in: 100 }));
+    expect(spans(slipClip(t, 'a', 30, len(500)))).toEqual([[20, 70, 130]]);
+    expect(spans(slipClip(t, 'a', -500, len(500)))).toEqual([[20, 70, 0]]);
+    expect(spans(slipClip(t, 'a', 500, len(500)))).toEqual([[20, 70, 450]]);
+    // At 2× the clip uses 100 source frames, so the latest in-point is 400.
+    const fast = withClips(clip('f', 20, 50, { in: 100, speed: 2 }));
+    expect(spans(slipClip(fast, 'f', 500, len(500)))).toEqual([[20, 70, 400]]);
+  });
+
+  it('does not slip stills, text or locked clips', () => {
+    const t = withClips(clip('i', 0, 50, { kind: 'image', in: undefined }));
+    expect(slipClip(t, 'i', 10)).toBe(t);
+    const locked = updateTrack(withClips(clip('a', 0, 50)), 'v1', { locked: true });
+    expect(slipClip(locked, 'a', 10)).toBe(locked);
+  });
+});
+
+describe('trim to the playhead', () => {
+  const caption = (id: string, start: number, duration: number): Clip => ({ id, kind: 'caption', trackId: 'v3', start, duration, words: [] });
+  const base = () => addClip(withClips(clip('a', 0, 50), clip('b', 50, 50, { in: 100 }), clip('o', 10, 20, { trackId: 'v2' })), caption('cb', 70, 20));
+
+  it('trims in place without the magnet', () => {
+    const t = trimToFrame(base(), ['b'], 'start', 60);
+    expect(spans(t)).toEqual([
+      [0, 50, 0],
+      [60, 100, 110],
+    ]);
+    expect(spans(trimToFrame(base(), ['b'], 'end', 80))).toEqual([
+      [0, 50, 0],
+      [50, 80, 100],
+    ]);
+  });
+
+  it('lengthens a clip to a playhead past its edge, as far as the source goes', () => {
+    expect(spans(trimToFrame(base(), ['o'], 'end', 60, () => 45), 'v2')).toEqual([[10, 55, 0]]);
+    expect(spans(trimToFrame(base(), ['b'], 'end', 40))).toEqual(spans(base()));
+  });
+
+  it('ripples main-track clips with the magnet, others stay in place', () => {
+    const t = trimToFrame(base(), ['b', 'o'], 'start', 20, undefined, {});
+    expect(spans(t, 'v2')).toEqual([[20, 30, 10]]);
+    const r = trimToFrame(base(), ['b'], 'start', 60, undefined, {});
+    expect(spans(r)).toEqual([
+      [0, 50, 0],
+      [50, 90, 110],
+    ]);
+    // Linked: the caption pulled left with the closed range.
+    expect(spans(r, 'v3').map((x) => x[0])).toEqual([60]);
+    const locked = updateTrack(base(), 'v1', { locked: true });
+    expect(trimToFrame(locked, ['b'], 'start', 60, undefined, {})).toBe(locked);
+  });
+});
+
+describe('copy and paste attributes', () => {
+  const look = clip('src', 0, 50, {
+    speed: 2,
+    volume: 0.5,
+    scale: 1.3,
+    opacity: 0.8,
+    fit: 'cover',
+    transition: { type: 'fade', duration: 10 },
+    effects: [
+      { type: 'grade', preset: 'warm' },
+      { type: 'grain', amount: 0.3 },
+    ],
+  });
+
+  it('copies the look with defaults filled in', () => {
+    expect(clipAttributes(look)).toMatchObject({ speed: 2, volume: 0.5, scale: 1.3, opacity: 0.8, rotation: 0, offsetX: 0, fit: 'cover' });
+    expect(clipAttributes(clip('s', 0, 10, { kind: 'audio', trackId: 'a1' }))).toEqual({ speed: 1, volume: 1 });
+  });
+
+  it('pastes onto every selected clip, replacing effects of the same type', () => {
+    let t = withClips(look, clip('a', 100, 100, { effects: [{ type: 'grade', preset: 'cool' }, { type: 'blur', amount: 0.2 }] }), clip('s', 0, 60, { kind: 'audio', trackId: 'a1' }));
+    t = addClip(t, { id: 'txt', kind: 'text', trackId: 'v2', start: 0, duration: 30, text: { text: 'x', fontSize: 50, color: '#fff', background: 'transparent', fontWeight: 700, x: 0.5, y: 0.5 } });
+    const out = pasteAttributes(t, ['a', 's', 'txt'], clipAttributes(look));
+    const a = out.clips.find((c) => c.id === 'a')!;
+    expect(a.effects).toEqual([{ type: 'grade', preset: 'warm' }, { type: 'blur', amount: 0.2 }, { type: 'grain', amount: 0.3 }]);
+    expect([a.speed, a.duration, a.volume, a.scale, a.fit, a.transition?.type]).toEqual([2, 50, 0.5, 1.3, 'cover', 'fade']);
+    const s = out.clips.find((c) => c.id === 's')!;
+    expect([s.speed, s.duration, s.volume, s.scale, s.effects]).toEqual([2, 30, 0.5, undefined, undefined]);
+    const txt = out.clips.find((c) => c.id === 'txt')!;
+    expect([txt.scale, txt.opacity, txt.speed, txt.effects, txt.fit]).toEqual([1.3, 0.8, undefined, undefined, undefined]);
+  });
+
+  it('ripples a main-track speed change with the magnet and skips locked tracks', () => {
+    const t = withClips(clip('a', 0, 100), clip('b', 100, 50), clip('o', 0, 40, { trackId: 'v2' }));
+    const out = pasteAttributes(t, ['a'], { speed: 2 }, undefined, {});
+    expect(spans(out)).toEqual([
+      [0, 50, 0],
+      [50, 100, 0],
+    ]);
+    // Off the main track a speed change never ripples.
+    expect(spans(pasteAttributes(t, ['o'], { speed: 2 }, undefined, {}), 'v2')).toEqual([[0, 20, 0]]);
+    const locked = updateTrack(t, 'v1', { locked: true });
+    expect(pasteAttributes(locked, ['a'], { speed: 2 })).toEqual(locked);
+  });
+});
+
+describe('track headers', () => {
+  it('renames a track and keeps its colour', () => {
+    const t = renameTrack(emptyTimeline(), 'v2', '  B-roll  ');
+    const v2 = t.tracks.find((x) => x.id === 'v2')!;
+    expect(v2.name).toBe('B-roll');
+    expect(v2.color).toBe(trackColor({ id: 'v2', kind: 'video', name: 'V2' }));
+    const same = emptyTimeline();
+    expect(renameTrack(same, 'v2', '   ')).toBe(same);
+  });
+
+  it('reorders tracks within their kind; the bottom video track is main', () => {
+    const t = reorderTrack(emptyTimeline(), 'v3', 2);
+    expect(t.tracks.map((x) => x.id)).toEqual(['v2', 'v1', 'v3', 'a1', 'a2', 'a3', 'a4']);
+    expect(mainTrackId(t)).toBe('v3');
+    expect(reorderTrack(emptyTimeline(), 'a4', 0).tracks.map((x) => x.id)).toEqual(['v3', 'v2', 'v1', 'a4', 'a1', 'a2', 'a3']);
+    // Indexes clamp within the kind: audio never moves above video.
+    expect(reorderTrack(emptyTimeline(), 'a2', -5).tracks.map((x) => x.id)).toEqual(['v3', 'v2', 'v1', 'a2', 'a1', 'a3', 'a4']);
+    const locked = updateTrack(emptyTimeline(), 'v1', { locked: true });
+    expect(reorderTrack(locked, 'v1', 0)).toBe(locked);
   });
 });

@@ -12,6 +12,7 @@ import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import {
   AbsoluteFill,
+  Freeze,
   Html5Audio,
   Img,
   OffthreadVideo,
@@ -22,7 +23,7 @@ import {
   useVideoConfig,
 } from 'remotion';
 import { activeWordIndex, chunkCaptions } from '../shared/captions';
-import { type Clip, type Timeline, type Transition, fadeEnvelope, framing } from '../shared/project';
+import { type Clip, type Timeline, type Transition, clipSpeed, fadeEnvelope, framing } from '../shared/project';
 import { applyEffects, enterTransition, exitTransition } from './effects';
 import { SlideClip } from './Slide';
 import { TITLE_FONT_FACES, easeOutBack, getTheme, textMotion } from '../shared/themes';
@@ -165,10 +166,17 @@ const VisualClip: React.FC<{ clip: Clip; src?: string; muted: boolean; gain: num
       <AbsoluteFill style={{ transform: fx.transform || undefined, filter: fx.filter || undefined }}>
         {clip.kind === 'image' ? (
           <Img src={src} style={mediaStyle} />
+        ) : clip.freeze ? (
+          // A freeze frame holds the source frame at `in`: the video is frozen at its first frame, silent.
+          <Freeze frame={0}>
+            <OffthreadVideo src={src} trimBefore={clip.in ?? 0} muted style={mediaStyle} />
+          </Freeze>
         ) : (
+          // Speed plays the source faster or slower (playbackRate); `in` is in source frames. Pitch is kept.
           <OffthreadVideo
             src={src}
             trimBefore={clip.in ?? 0}
+            playbackRate={clipSpeed(clip)}
             muted={muted || Boolean(clip.muted)}
             volume={(f) => gain * motionGain * (clip.volume ?? 1) * fadeEnvelope(clip, f)}
             pauseWhenBuffering
@@ -203,7 +211,16 @@ function transitionTails(clips: Clip[]): { tail: Clip; exit: Transition }[] {
     if (!a) continue;
     const duration = Math.min(b.transition.duration, b.duration);
     out.push({
-      tail: { ...a, id: `${a.id}-tail`, start: b.start, duration, in: (a.in ?? 0) + a.duration, fadeIn: 0, fadeOut: 0, transition: undefined },
+      tail: {
+        ...a,
+        id: `${a.id}-tail`,
+        start: b.start,
+        duration,
+        in: (a.in ?? 0) + Math.round(a.duration * clipSpeed(a)),
+        fadeIn: 0,
+        fadeOut: 0,
+        transition: undefined,
+      },
       exit: { ...b.transition, duration },
     });
   }
@@ -281,6 +298,7 @@ export const TimelineComposition: React.FC<TimelineProps> = ({ timeline, theme, 
               <Html5Audio
                 src={sources[clip.assetId!]}
                 trimBefore={clip.in ?? 0}
+                playbackRate={clipSpeed(clip)}
                 volume={(f) => (track.volume ?? 1) * (clip.volume ?? 1) * fadeEnvelope(clip, f)}
                 pauseWhenBuffering
               />

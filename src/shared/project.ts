@@ -36,7 +36,11 @@ export interface Track {
   muted?: boolean;
   hidden?: boolean;
   locked?: boolean;
+  /** Row height in the editor; normal when unset. Preview and export ignore it. */
+  height?: TrackHeight;
 }
+
+export type TrackHeight = 'small' | 'normal' | 'large';
 
 export const TRACK_LIMITS = { video: 10, audio: 8 } as const;
 
@@ -124,6 +128,30 @@ export interface Clip {
   effects?: Effect[];
   /** How this clip enters from the clip just before it on the same track. */
   transition?: Transition;
+  /**
+   * Video and audio clips: playback speed, SPEED_LIMITS.min to max (default 1).
+   * The clip plays `duration × speed` frames of its source from `in`.
+   */
+  speed?: number;
+  /** Video clips: a still of the source frame at `in`, held for the clip's whole length, without sound. */
+  freeze?: boolean;
+}
+
+export const SPEED_LIMITS = { min: 0.25, max: 4 } as const;
+export const SPEED_PRESETS = [0.25, 0.5, 1, 1.5, 2, 4] as const;
+
+/**
+ * Source frames a clip plays per timeline frame: its speed for video and
+ * audio, 0 for a freeze frame (the source never advances), and 1 otherwise.
+ */
+export function clipSpeed(clip: Clip): number {
+  if (clip.freeze) return 0;
+  return (clip.kind === 'video' || clip.kind === 'audio') && clip.speed ? clip.speed : 1;
+}
+
+/** "2×", "0.5×", "1.25×" */
+export function speedLabel(speed: number): string {
+  return `${Number(speed.toFixed(2))}×`;
 }
 
 export type SlideLayout = 'title' | 'bullets' | 'image' | 'split' | 'stat' | 'quote';

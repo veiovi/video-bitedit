@@ -12,6 +12,7 @@ import {
   FORMATS,
   type FormatId,
   type ProjectDoc,
+  SPEED_LIMITS,
   TRACK_LIMITS,
   type TextStyle,
   type Timeline,
@@ -34,8 +35,10 @@ export interface CutListClip {
   /** Source in/out points in seconds. */
   in?: number;
   out?: number;
-  /** Length in seconds (alternative to `out`; required for images and text without `out`). */
+  /** Length in seconds (alternative to `out`; required for images and text without `out`). On the timeline, so with `speed` it plays `duration × speed` seconds of source. */
   duration?: number;
+  /** Video and audio: playback speed, 0.25–4 (default 1). The clip plays `in`→`out` and lasts (out − in) / speed. */
+  speed?: number;
   volume?: number;
   /** Video: turn off the clip's own sound (e.g. when its sound is placed on an audio track separately). */
   muted?: boolean;
@@ -248,10 +251,12 @@ function buildTimeline(
     // A video placed on an audio track becomes an audio clip of its sound.
     const kind: Clip['kind'] = asset ? (asset.kind === 'video' && track.kind === 'audio' ? 'audio' : asset.kind) : item.slide ? 'slide' : 'text';
 
+    const speed = (kind === 'video' || kind === 'audio') && item.speed ? Math.min(SPEED_LIMITS.max, Math.max(SPEED_LIMITS.min, item.speed)) : 1;
     let srcIn = item.in ?? 0;
     const sourceLen = asset?.duration ?? null;
+    // Seconds of source the clip plays.
     let seconds: number;
-    if (item.duration !== undefined) seconds = item.duration;
+    if (item.duration !== undefined) seconds = item.duration * speed;
     else if (item.out !== undefined) seconds = item.out - srcIn;
     else if (sourceLen !== null) seconds = sourceLen - srcIn;
     else seconds = kind === 'text' ? 3 : kind === 'slide' ? 5 : 5;
@@ -275,9 +280,10 @@ function buildTimeline(
       kind,
       trackId: track.id,
       start,
-      duration: Math.max(1, f(seconds)),
+      duration: Math.max(1, f(seconds / speed)),
       assetId: asset?.id,
       in: asset && asset.kind !== 'image' ? f(srcIn) : undefined,
+      speed: speed !== 1 ? speed : undefined,
       volume: item.volume,
       muted: kind === 'video' && item.muted ? true : undefined,
       opacity: item.opacity,

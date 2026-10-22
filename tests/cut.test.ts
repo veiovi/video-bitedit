@@ -67,6 +67,25 @@ describe('cut lists', () => {
     expect([sound.assetId, sound.in, sound.duration, sound.fadeOut, sound.muted]).toEqual(['aaaaaaaa', 60, 120, 30, undefined]);
   });
 
+  it('plays clips at a speed, keeping in and out in source seconds', () => {
+    const doc = buildFromCutList(
+      {
+        clips: [
+          { asset: 'intro', in: 2, out: 6, speed: 2 },
+          { asset: 'b-roll.mov', in: 1, duration: 3, speed: 0.5 },
+          { asset: 'logo.png', duration: 2, speed: 2 },
+        ],
+      },
+      assets,
+    );
+    const clips = doc.timelines[0].clips;
+    expect(clips.map((c) => [c.start, c.duration, c.in, c.speed])).toEqual([
+      [0, 60, 60, 2],
+      [60, 90, 30, 0.5],
+      [150, 60, undefined, undefined],
+    ]);
+  });
+
   it('clamps to the source length', () => {
     const doc = buildFromCutList({ clips: [{ asset: 'intro', in: 8, duration: 30 }] }, assets);
     expect(doc.timelines[0].clips[0].duration).toBe(60);

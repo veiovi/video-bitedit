@@ -6,7 +6,7 @@
 // being spoken. Lines hold 3–4 words and break at punctuation and at pauses.
 
 import type { CaptionWord, Clip, Timeline, Track } from './project';
-import { clipEnd } from './project';
+import { clipEnd, clipSpeed } from './project';
 
 export interface TranscriptWord {
   text: string;
@@ -128,10 +128,13 @@ export function retimeWords(words: CaptionWord[] | undefined, delta: number, dur
 /** Transcript words heard during a media clip, in frames relative to the clip. */
 export function clipWords(clip: Clip, transcript: Pick<Transcript, 'words'>, fps: number): CaptionWord[] {
   const srcIn = clip.in ?? 0;
+  const speed = clipSpeed(clip);
   const out: CaptionWord[] = [];
+  // A freeze frame is silent.
+  if (speed === 0) return out;
   for (const w of transcript.words) {
-    const start = Math.round(w.start * fps) - srcIn;
-    const end = Math.max(start + 1, Math.round(w.end * fps) - srcIn);
+    const start = Math.round((w.start * fps - srcIn) / speed);
+    const end = Math.max(start + 1, Math.round((w.end * fps - srcIn) / speed));
     // Keep a word only if most of it is inside the clip.
     const mid = (start + end) / 2;
     if (mid < 0 || mid >= clip.duration) continue;

@@ -82,6 +82,7 @@ kept.
 | `at` | Timeline position in seconds. If omitted, the clip goes after the previous clip on that track |
 | `in` / `out` | Source in and out points in seconds (default: the whole file) |
 | `duration` | Length in seconds, as an alternative to `out`. Required for images and text unless the default of 5 s or 3 s is fine |
+| `speed` | Video and audio: 0.25–4 (default 1). The clip plays `in`→`out` at that speed, so it lasts (out − in) / speed on the timeline; `duration` is then the timeline length. Sound keeps its pitch |
 | `volume` | 0–2, where 1 = 100% |
 | `muted` | `true` turns off a video clip's own sound. To fade or trim a video's sound separately, mute the video and place the same asset, with the same `in`/`out`, on an `A` track |
 | `fadeIn` / `fadeOut` | Seconds. Visuals fade their picture, audio fades its volume, and a video clip fades both |
