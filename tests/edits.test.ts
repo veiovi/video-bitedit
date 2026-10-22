@@ -443,7 +443,7 @@ describe('clipboard, enable/disable and navigation', () => {
   });
 });
 
-describe('replacing media (CapCut rules)', () => {
+describe('replacing media', () => {
   it('keeps the slot and the look, and plays the chosen part of the new media', () => {
     const t = withClips(clip('a', 0, 60), clip('b', 60, 90, { in: 40, fadeIn: 5, volume: 0.5, scale: 1.1, effects: [{ type: 'grain' }] } as Partial<Clip>));
     const b = replaceClipMedia(t, 'b', { id: 'new', kind: 'video', frames: 300 }, { inPoint: 120 }).clips.find((c) => c.id === 'b')!;
