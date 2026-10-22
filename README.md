@@ -127,7 +127,7 @@ below.
   word to jump there, select a run and press ⌫ to cut it from every track;
   cut words stay visible, struck through, and come back with a click.
 - A command palette (⌘K) for every command, marker, clip and help topic.
-  Detach audio moves a video clip's sound to its own clip on an audio track,
+- Detach audio moves a video clip's sound to its own clip on an audio track,
   to trim, move and fade it separately.
 
 **Look and sound**
