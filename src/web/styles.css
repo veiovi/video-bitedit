@@ -3612,7 +3612,8 @@ button.help-more:hover:not(:disabled) {
     right: 0;
   }
 
+  /* The phone transport has no room for it, like the preview volume. */
   .level-meter.horizontal {
-    width: 48px;
+    display: none;
   }
 }
