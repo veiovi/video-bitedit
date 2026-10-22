@@ -34,12 +34,13 @@ async function audioPeaks(file: File): Promise<number[] | null> {
   try {
     const ctx = new OfflineAudioContext(1, 1, 8000);
     const buffer = await ctx.decodeAudioData(await file.arrayBuffer());
-    const data = buffer.getChannelData(0);
+    // The loudest sample of any channel, so meters and Normalize see true peaks.
+    const data = Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c));
     const bucket = Math.max(1, Math.floor(buffer.sampleRate / PEAKS_PER_SECOND));
     const peaks: number[] = [];
-    for (let i = 0; i < data.length; i += bucket) {
+    for (let i = 0; i < buffer.length; i += bucket) {
       let max = 0;
-      for (let j = i; j < Math.min(i + bucket, data.length); j++) max = Math.max(max, Math.abs(data[j]));
+      for (const ch of data) for (let j = i; j < Math.min(i + bucket, ch.length); j++) max = Math.max(max, Math.abs(ch[j]));
       peaks.push(Math.min(255, Math.round(max * 255)));
     }
     return peaks;
