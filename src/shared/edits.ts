@@ -181,6 +181,15 @@ export function setFade(doc: Timeline, id: string, edge: 'in' | 'out', frames: n
   return updateClip(doc, id, edge === 'in' ? { fadeIn: value } : { fadeOut: value });
 }
 
+/** Clip and track volume run from silent to double (2 = 200%). */
+export const MAX_VOLUME = 2;
+
+/** Set a clip's volume, kept between silent and MAX_VOLUME and rounded to whole percent. */
+export function setVolume(doc: Timeline, id: string, volume: number): Timeline {
+  const value = Math.round(Math.max(0, Math.min(MAX_VOLUME, volume)) * 100) / 100;
+  return updateClip(doc, id, { volume: value });
+}
+
 /**
  * Detach the sound of video clips: each gets an audio clip playing the same
  * part of its source (with its volume and fades) on the first audio track

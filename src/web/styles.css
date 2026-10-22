@@ -1326,12 +1326,13 @@ h3 {
   color: var(--dim);
 }
 
+/* Shown on hover, but always holding its place so the other buttons never shift under the pointer. */
 .track-buttons .remove-track {
-  display: none;
+  visibility: hidden;
 }
 
 .track-header:hover .remove-track {
-  display: inline-flex;
+  visibility: visible;
 }
 
 .track-volume {
@@ -1660,6 +1661,81 @@ h3 {
 
 .tool-razor .fade-handle {
   display: none;
+}
+
+/* Volume line on audio clips: drag it up or down; 100% sits a third of the way down, 200% at the top. */
+.volume-line {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  height: 10px;
+  transform: translateY(-50%);
+  cursor: ns-resize;
+  z-index: 3;
+  touch-action: none;
+}
+
+.volume-line::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-top: 1.5px solid var(--clip-ink);
+  opacity: 0.7;
+  transform: translateY(-50%);
+}
+
+.clip:hover .volume-line::after,
+.clip.selected .volume-line::after {
+  opacity: 1;
+}
+
+.tool-razor .volume-line {
+  display: none;
+}
+
+@media (pointer: coarse) {
+  .volume-line {
+    height: 16px;
+  }
+}
+
+/* Solo: the S button in a track header, and the tracks it silences. */
+.track-buttons button.solo {
+  min-width: 20px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.track-buttons button.solo.on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.track-header.silenced .track-badge {
+  opacity: 0.45;
+}
+
+.track-lane.silenced .waveform {
+  opacity: 0.35;
+}
+
+/* Loop playback: the stretch that repeats, shaded on the ruler. */
+.loop-range {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-inline: 2px solid var(--accent);
+  background: var(--accent-soft);
+  pointer-events: none;
+}
+
+.transport-buttons button.on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* While dragging: where the clip snapped, and a readout of its new start, length or fade. */
@@ -2363,7 +2439,7 @@ h3 {
 
   .timeline {
     height: 300px;
-    --header-w: 92px;
+    --header-w: 112px;
   }
 
   .timeline-toolbar {
@@ -2386,13 +2462,19 @@ h3 {
     display: none;
   }
 
-  .track-label {
+  .track-label,
+  .track-buttons .remove-track {
     display: none;
   }
 
   .track-header {
     grid-template-columns: auto 1fr;
     padding: 2px 4px;
+  }
+
+  /* Hide or mute, solo and lock fit beside the track name. */
+  .track-buttons button {
+    padding: 2px;
   }
 
   .handle {

@@ -32,6 +32,7 @@ const PATHS: Record<string, string> = {
   upload: 'M12 16V4M7 9l5-5 5 5M4 16v4h16v-4',
   share: 'M4 12v8h16v-8M12 3v12M7 8l5-5 5 5',
   grid: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
+  repeat: 'M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3',
 };
 
 export function Icon({ name, size = 16 }: { name: string; size?: number }) {

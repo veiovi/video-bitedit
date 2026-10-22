@@ -15,6 +15,7 @@ import {
   rippleScope,
   seekEdit,
   toggleEnabledSelection,
+  toggleLoop,
   useEditor,
   zoomToFit,
 } from '../store';
@@ -296,6 +297,10 @@ function useKeyboard() {
           break;
         case 'l':
         case 'j': {
+          if (key === 'l' && e.shiftKey) {
+            toggleLoop();
+            break;
+          }
           const dir = key === 'l' ? 1 : -1;
           shuttle = Math.sign(shuttle) === dir ? Math.min(4, Math.abs(shuttle) * 2) * dir : dir;
           useEditor.setState({ playbackRate: shuttle });

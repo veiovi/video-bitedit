@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { addClip, addTrack, adjacentEditPoint, boundaryNear, canReplace, clipsFrom, closeGaps, closeRange, cropRange, deleteClips, deleteSide, deriveTimeline, detachAudio, gapAt, insertClip, mainTrackId, moveClip, moveClips, moveMainClip, pasteClips, replaceClipMedia, replaceProblem, rippleDeleteClips, rippleTrim, setFade, splitAt, toggleClipsEnabled, trimClip } from '../src/shared/edits';
-import { type Clip, type PublishedVideo, TRACK_LIMITS, type Timeline, aspectLabel, emptyTimeline, framing, parseTimecode, pickVersions } from '../src/shared/project';
+import { addClip, addTrack, adjacentEditPoint, boundaryNear, canReplace, clipsFrom, closeGaps, closeRange, cropRange, deleteClips, deleteSide, deriveTimeline, detachAudio, gapAt, insertClip, mainTrackId, moveClip, moveClips, moveMainClip, pasteClips, replaceClipMedia, replaceProblem, rippleDeleteClips, rippleTrim, setFade, setVolume, MAX_VOLUME, splitAt, toggleClipsEnabled, trimClip } from '../src/shared/edits';
+import { type Clip, type PublishedVideo, TRACK_LIMITS, type Timeline, aspectLabel, emptyTimeline, framing, parseTimecode, pickVersions, withSolo } from '../src/shared/project';
 
 function clip(id: string, start: number, duration: number, extra: Partial<Clip> = {}): Clip {
   return { id, kind: 'video', trackId: 'v1', start, duration, assetId: 'a', in: 0, ...extra };
@@ -364,6 +364,23 @@ describe('detaching audio and fades', () => {
     expect(setFade(t, 'a', 'in', 90).clips[0].fadeIn).toBe(70);
     expect(setFade(t, 'a', 'in', -5).clips[0].fadeIn).toBe(0);
     expect(setFade(t, 'a', 'out', 12.4).clips[0].fadeOut).toBe(12);
+  });
+
+  it('keeps volume between silent and double, in whole percent', () => {
+    const t = withClips(clip('a', 0, 100));
+    expect(setVolume(t, 'a', 0.734).clips[0].volume).toBe(0.73);
+    expect(setVolume(t, 'a', 3).clips[0].volume).toBe(MAX_VOLUME);
+    expect(setVolume(t, 'a', -1).clips[0].volume).toBe(0);
+  });
+
+  it('solo mutes every other track for listening, and only when a soloed track is in this timeline', () => {
+    const t = emptyTimeline();
+    const heard = withSolo(t, ['a2']);
+    expect(heard.tracks.filter((x) => x.muted).map((x) => x.id)).toEqual(t.tracks.filter((x) => x.id !== 'a2').map((x) => x.id));
+    expect(heard.tracks.some((x) => x.hidden)).toBe(false);
+    expect(withSolo(t, ['a1', 'a2']).tracks.filter((x) => !x.muted).map((x) => x.id)).toEqual(['a1', 'a2']);
+    expect(withSolo(t, ['elsewhere'])).toBe(t);
+    expect(withSolo(t, [])).toBe(t);
   });
 });
 
