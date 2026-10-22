@@ -11,7 +11,7 @@ The model lives in `src/shared/project.ts`.
 - **Timeline**: `{ id, name, fps, width, height, background, tracks[], clips[], markers[] }`.
   Tracks are listed top to bottom, and higher video tracks draw over lower
   ones. There can be up to 10 video tracks and 8 audio tracks.
-- **Clip**: `{ id, kind, trackId, start, duration, assetId?, in?, volume?, muted?, disabled?, fadeIn?, fadeOut?, opacity?, scale?, rotation?, offsetX?, offsetY?, fit?, text?, words?, speed?, freeze? }`.
+- **Clip**: `{ id, kind, trackId, start, duration, assetId?, in?, volume?, muted?, disabled?, fadeIn?, fadeOut?, opacity?, scale?, rotation?, offsetX?, offsetY?, fit?, text?, words?, speed?, freeze?, keyframes? }`.
   All times are integer frames. `in` is the offset into the source, in
   source frames. `speed` (video and audio, 0.25–4, default 1) plays
   `duration × speed` source frames from `in`; `clipSpeed` gives it, and the
@@ -24,6 +24,17 @@ The model lives in `src/shared/project.ts`.
   track and sets `muted` on the video clip. A `disabled` clip stays on the
   timeline but is skipped in preview and export. Fades scale opacity for visuals and
   gain for sound.
+- **Keyframes** (`src/shared/keyframes.ts`): `keyframes` maps a property
+  (`opacity`, `scale`, `offsetX`, `offsetY`, `rotation`, `volume`) to keys
+  `{ frame, value, ease?, duck? }`, in frames from the clip's start (0 to
+  duration − 1), sorted, one per frame. A property with keys ignores its
+  static value. `valueAt(clip, prop, frame)` is the curve: it holds the first
+  key's value before it and the last key's after it, and between two keys
+  follows the first key's `ease` (`linear` by default, `hold`, or cubic
+  `easeIn`, `easeOut`, `easeInOut`). `animatableProps` lists what each kind
+  draws: video and images the transform and opacity (video also volume,
+  unless frozen), text and captions opacity, scale and rotation, audio
+  volume. `duck` marks volume keys that ducking wrote.
 - **Caption clip**: `kind: 'caption'` with `words: [{ text, start, end }]` in
   frames relative to the clip's start, and `text` for the look (the theme's
   caption preset plus `highlight`, the accent colour, `captionLook` and
@@ -51,6 +62,23 @@ The model lives in `src/shared/project.ts`.
   a placed clip carves out the range it lands on. Split, trim, ripple delete,
   `deriveTimeline` (format conversion with crop to fill) and `cropRange`
   (highlight range) live there too.
+- **Edits keep keyframes on the footage.** `reframe`, which every head or
+  tail trim goes through (trims, splits, overwrites, ripple trims, rolls,
+  `cropRange`), shifts keys by the head trim and cuts them to the new length
+  with `cropKeys`: where the curve crosses an edge, a key goes on the edge
+  with the value the curve had there, then keys outside are dropped. Linear
+  and hold spans stay exact; an eased span cut part-way keeps its ends and
+  its ease. A split therefore gives each half its own keys plus one at the
+  cut, so values run on. `setSpeed` stretches keys with the clip's length.
+  `freezeFrame` gives the still the animated values at its frame as static
+  ones. `detachAudio` moves volume keys to the new audio clip, and
+  `clipAttributes`/`pasteAttributes` treat keys as part of the look: each
+  pasted property takes the copied keys (cut to the target's length, after
+  any speed change) or loses its own. The key ops are `setKeyframe` (add,
+  or replace at that frame, keeping its ease unless given), `removeKeyframe`,
+  `moveKeyframe` (kept inside the clip) and `clearKeyframes` (the value at a
+  frame becomes the static value). `duckClips`, `removeDucking` and
+  `setClipGain` (volume and volume keys scale together) are the audio ops.
 - **Timeline editing follows CapCut.**
   - **Main-track magnet** (P, on by default; the setting is kept per browser).
     The main track is the bottom video track (V1, `mainTrackId`), and it stays
@@ -121,8 +149,8 @@ The model lives in `src/shared/project.ts`.
     outside them and the source allows; main-track clips ripple with the
     magnet on.
   - **Copy attributes.** ⌥⌘C takes the selected clip's look
-    (`clipAttributes`: effects, transition, opacity, transform, speed and
-    volume) and ⌥⌘V pastes it onto every selected clip
+    (`clipAttributes`: effects, transition, opacity, transform, speed,
+    volume and their keyframes) and ⌥⌘V pastes it onto every selected clip
     (`pasteAttributes`). Each clip takes what applies to its kind, and a
     pasted effect replaces one of the same type.
   - **Track headers.** Double-click a name to rename it (`renameTrack`; the
@@ -148,6 +176,48 @@ The model lives in `src/shared/project.ts`.
     the source (`restoreSourceGap`: everything after moves right on every
     unlocked track and the clips before the cut play on). Caption clips over
     a restored stretch are not regenerated.
+  - **Keyframing.** Each property a clip can animate gets ◆ in the
+    inspector: it adds a key at the playhead with the value showing there,
+    or removes the key that is there (`toggleKeyframe` in
+    `src/web/keyframing.ts`); ‹ and › seek to the previous and next key
+    (`adjacentKey`). Once a property has keys, its slider shows the value at
+    the playhead and moving it sets a key there (auto-key, one undo step per
+    gesture). With a key under the playhead, Then picks its ease and Clear
+    removes the property's keys. `;` toggles a key on the selected clip for
+    the property last used in the inspector (opacity, or volume on audio, by
+    default). The selected clip shows one diamond per keyed frame along its
+    bottom edge: dragging moves every key on that frame (snapped to frames,
+    inside the clip, one undo step through `preview`/`commitFrom`),
+    ⌥-click deletes them, a click seeks to them. An audio clip with volume
+    keys draws its curve, on the volume line's scale, instead of the line,
+    and waveforms follow the keyed gain.
+  - **Ducking.** Duck under speech (an audio clip's inspector, or
+    right-click an audio track header) works on that whole track.
+    `speechRanges` (`src/shared/ducking.ts`) finds speech on the other
+    unmuted tracks: transcript words for assets that have a transcript,
+    otherwise frames whose peak, after the clip's gain, rises above −26 dBFS.
+    `duckingKeys` merges phrases closer than `minGap` (15 frames) or than the
+    ramps need, and keys each music clip from its own volume down by `depth`
+    (−12 dB; −6 to −24) from `attack` frames (6) before each phrase until
+    `release` frames (12) after it. The keys are tagged `duck` and written in
+    one undo step (`duckClips`); they replace the clip's volume keys, after a
+    confirm when some were set by hand. Remove ducking (`removeDucking`)
+    takes out only tagged keys. Depth, attack and release are remembered in
+    the browser.
+  - **Levels and Normalize.** `src/shared/levels.ts` reads levels from the
+    stored peaks with the composition's gain: source peak under the frame
+    (following `in` and speed) × `valueAt(volume)` × fades × track volume,
+    with muted tracks, hidden video tracks and disabled clips silent
+    (`mixLevels`). Each audio track header has a meter and the transport a
+    master meter (`components/Meter.tsx`). They redraw through refs from one
+    subscription to the playhead, the document and solo (the preview's solo
+    applies), fall back at 24 dB/s while playing, hold the peak for a second
+    (red above 0 dBFS), and show the level at the playhead when stopped. The
+    master combines tracks by power; measured against exports it lands within
+    a dB or two of the mix's sample peak. Normalize (`clipPeak`,
+    `normalizeGain`, `setClipGain`) sets a clip's gain so its loudest sample
+    reaches −1 dBFS, at most 200%; its volume keys scale with it. The
+    inspector shows volume in dB beside the percentage.
   - **Command palette.** ⌘K (Ctrl+K) searches every editor command, the
     timeline's markers, the media bin ("Add to timeline") and the Help topics
     with a fuzzy match (`src/shared/fuzzy.ts`). The commands come from one
@@ -239,7 +309,9 @@ Worker first.
 **Local** (`src/node/local-server.ts`): one project folder.
 - `videdit.json` holds the doc and assets.
 - `.videdit/` holds thumbnails, filmstrips (`thumbs/<assetId>.filmstrip.jpg`), peaks (for every audio and video file; `[]`
-  when a video has no sound, and made on first request for older imports),
+  when a video has no sound, and made on first request for older imports;
+  each value is the loudest sample of any channel in its 20 ms, decoded at
+  48 kHz, so meters and Normalize read true sample peaks),
   transcripts (`transcripts/<assetId>.json`),
   comments, renders and the cloud link (`remote.json`, which includes the
   edit key).

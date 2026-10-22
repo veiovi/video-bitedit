@@ -96,6 +96,7 @@ kept.
 | `transition` | `{ type, duration }`, where duration is in seconds (default 0.5). It enters from the clip that ends where this one starts on the same track, and that clip keeps playing underneath. A clip with no neighbour fades or slides in over the tracks below it. Types: `fade`, `dipBlack`, `dipWhite`, `slide`, `whip`, `wipe`, `zoom` |
 | `style` | For text: `preset` (`title`, `caption`, `lowerThird`), `fontSize`, `color`, `background`, `x`, `y` (0–1), and `animation` (`none`, `fade`, `rise`, `pop`, `slam`, `typewriter`) |
 | `snap` | `true` or `false`: move `in`/`out` into nearby silence (see below). Overrides the timeline and file setting |
+| `keyframes` | Animation, per property: `{ "opacity": [{ "at": 0, "value": 0 }, { "at": 1, "value": 1, "ease": "easeOut" }] }`. `at` is seconds from the clip's start (inside the clip), `ease` shapes the move to the next key (`linear`, `easeIn`, `easeOut`, `easeInOut`, `hold`). Video and images animate `opacity`, `scale`, `offsetX`, `offsetY` and `rotation` (video also `volume`); text animates `opacity`, `scale` and `rotation`; audio animates `volume`. A property with keys ignores its static value. Bad keys stop the cut with a message naming the clip |
 
 **Placement overwrites.** A clip placed over an existing clip on the same
 track carves out that range. Put overlays on higher tracks instead of on top
@@ -257,6 +258,8 @@ the project (the latest render of each, longest first, with `Main` shown as
 - The first 3 seconds give a reason to keep watching.
 - No shot lingers without purpose. B-roll changes roughly every 2–4 seconds.
 - Music sits under the dialogue (around 0.25–0.4 volume) and fades out at the end.
+  To dip it only while someone speaks, give the music clip `volume` keyframes,
+  or ask the person to use Duck under speech on the music track in the editor.
 - Text stays out of the speaker's face and inside the safe area. On vertical
   timelines, keep captions at y ≈ 0.65–0.8 so the platform's buttons and
   description do not cover them.
