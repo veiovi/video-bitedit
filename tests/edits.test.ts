@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { addClip, addTrack, adjacentEditPoint, boundaryNear, canReplace, clipsFrom, closeGaps, closeRange, cropRange, deleteClips, deleteSide, deriveTimeline, detachAudio, gapAt, insertClip, mainTrackId, moveClip, moveClips, moveMainClip, pasteClips, replaceClipMedia, replaceProblem, rippleDeleteClips, rippleTrim, setFade, setVolume, MAX_VOLUME, splitAt, toggleClipsEnabled, trimClip } from '../src/shared/edits';
+import { addMarker, chapterTime, chaptersFromMarkers, extractRange, liftRange, moveMarker, openRange, removeMarker, snapPoints, updateMarker } from '../src/shared/edits';
 import { clipAttributes, freezeFrame, pasteAttributes, renameTrack, reorderTrack, rollEdit, setSpeed, slipClip, trimToFrame, updateTrack } from '../src/shared/edits';
 import { clipWords } from '../src/shared/captions';
+import { type Marker, renderExt, renderMime, renderRange } from '../src/shared/project';
 import { type Clip, type PublishedVideo, TRACK_LIMITS, type Timeline, aspectLabel, emptyTimeline, framing, parseTimecode, pickVersions, trackColor, withSolo } from '../src/shared/project';
 
 function clip(id: string, start: number, duration: number, extra: Partial<Clip> = {}): Clip {
@@ -845,5 +847,232 @@ describe('track headers', () => {
     expect(reorderTrack(emptyTimeline(), 'a2', -5).tracks.map((x) => x.id)).toEqual(['v3', 'v2', 'v1', 'a2', 'a1', 'a3', 'a4']);
     const locked = updateTrack(emptyTimeline(), 'v1', { locked: true });
     expect(reorderTrack(locked, 'v1', 0)).toBe(locked);
+  });
+});
+
+describe('in/out ranges', () => {
+  // V1: a [0,100) and b [100,200); V2: an overlay o [50,150); A1: music [0,200); a caption on V3.
+  const base = () => {
+    let t = withClips(
+      clip('a', 0, 100, { fadeOut: 10 }),
+      clip('b', 100, 100, { in: 300, fadeIn: 10 }),
+      clip('o', 50, 100, { trackId: 'v2', kind: 'image', in: undefined }),
+      clip('music', 0, 200, { trackId: 'a1', kind: 'audio' }),
+    );
+    t = addClip(t, {
+      id: 'cap',
+      kind: 'caption',
+      trackId: 'v3',
+      start: 60,
+      duration: 80,
+      words: [
+        { text: 'before', start: 0, end: 20 },
+        { text: 'inside', start: 30, end: 50 },
+        { text: 'after', start: 60, end: 80 },
+      ],
+    });
+    return { ...t, markers: [{ id: 'm1', frame: 95, label: 'inside' }, { id: 'm2', frame: 160, label: 'after' }] };
+  };
+  const words = (t: Timeline) => t.clips.filter((c) => c.kind === 'caption').map((c) => [c.start, c.duration, c.words!.map((w) => [w.text, w.start, w.end])]);
+
+  it('lift removes the range from every unlocked track and leaves a gap', () => {
+    const t = liftRange(base(), 80, 120);
+    expect(spans(t)).toEqual([
+      [0, 80, 0],
+      [120, 200, 320],
+    ]);
+    expect(spans(t, 'v2').map(([s, e]) => [s, e])).toEqual([
+      [50, 80],
+      [120, 150],
+    ]);
+    expect(spans(t, 'a1')).toEqual([
+      [0, 80, 0],
+      [120, 200, 120],
+    ]);
+    // Cut edges become hard cuts: no fade into or out of the gap.
+    expect(t.clips.find((c) => c.id === 'a')!.fadeOut).toBe(0);
+    // Markers keep their place.
+    expect(t.markers.map((m) => m.frame)).toEqual([95, 160]);
+  });
+
+  it('keeps caption words in step when lifting and extracting', () => {
+    // Caption [60,140): "inside" is spoken at 90–110, entirely in the range.
+    expect(words(liftRange(base(), 80, 120))).toEqual([
+      [60, 20, [['before', 0, 20]]],
+      [120, 20, [['after', 0, 20]]],
+    ]);
+    expect(words(extractRange(base(), 80, 120))).toEqual([
+      [60, 20, [['before', 0, 20]]],
+      [80, 20, [['after', 0, 20]]],
+    ]);
+  });
+
+  it('extract closes the gap and ripples clips and markers', () => {
+    const t = extractRange(base(), 80, 120);
+    expect(spans(t)).toEqual([
+      [0, 80, 0],
+      [80, 160, 320],
+    ]);
+    expect(spans(t, 'a1')).toEqual([
+      [0, 80, 0],
+      [80, 160, 120],
+    ]);
+    expect(t.markers).toEqual([{ id: 'm2', frame: 120, label: 'after' }]);
+  });
+
+  it('leaves locked tracks alone', () => {
+    const locked = updateTrack(base(), 'a1', { locked: true });
+    const lifted = liftRange(locked, 80, 120);
+    expect(spans(lifted, 'a1')).toEqual([[0, 200, 0]]);
+    const extracted = extractRange(locked, 80, 120);
+    expect(spans(extracted, 'a1')).toEqual([[0, 200, 0]]);
+    expect(spans(extracted)).toEqual([
+      [0, 80, 0],
+      [80, 160, 320],
+    ]);
+    const allLocked = { ...base(), tracks: base().tracks.map((x) => ({ ...x, locked: true })) };
+    expect(liftRange(allLocked, 80, 120)).toEqual(allLocked);
+    expect(extractRange(allLocked, 80, 120)).toBe(allLocked);
+  });
+
+  it('ignores empty ranges and clamps before zero', () => {
+    const t = base();
+    expect(liftRange(t, 50, 50)).toBe(t);
+    expect(extractRange(t, 60, 40)).toBe(t);
+    expect(spans(extractRange(t, -20, 10))).toEqual([
+      [0, 90, 10],
+      [90, 190, 300],
+    ]);
+  });
+});
+
+describe('markers', () => {
+  const t0 = () => withClips(clip('a', 0, 3000));
+
+  it('adds point and range markers in time order with default labels', () => {
+    let t = addMarker(t0(), { frame: 90, id: 'b' });
+    t = addMarker(t, { frame: 30.4, id: 'a', label: '  Hook  ', color: '#5a7fc0', duration: 60 });
+    expect(t.markers).toEqual([
+      { id: 'a', frame: 30, label: 'Hook', color: '#5a7fc0', duration: 60 },
+      { id: 'b', frame: 90, label: 'Marker 1' },
+    ]);
+    // Unknown colours and empty lengths are dropped; frames clamp at zero.
+    expect(addMarker(t0(), { frame: -5, id: 'c', color: 'hotpink', duration: 0 }).markers).toEqual([{ id: 'c', frame: 0, label: 'Marker 1' }]);
+  });
+
+  it('renames, recolours, resizes and removes', () => {
+    const t = addMarker(t0(), { frame: 10, id: 'm', label: 'One' });
+    let u = updateMarker(t, 'm', { label: 'Two', color: '#d0533f', duration: 45 });
+    expect(u.markers[0]).toEqual({ id: 'm', frame: 10, label: 'Two', color: '#d0533f', duration: 45 });
+    // An empty label is ignored; null clears the colour; a zero duration makes it a point again.
+    u = updateMarker(u, 'm', { label: '   ', color: null, duration: 0 });
+    expect(u.markers[0]).toEqual({ id: 'm', frame: 10, label: 'Two' });
+    expect(updateMarker(t, 'm', { label: 'One' })).toBe(t);
+    expect(updateMarker(t, 'nope', { label: 'x' })).toBe(t);
+    expect(removeMarker(u, 'm').markers).toEqual([]);
+    expect(removeMarker(u, 'nope')).toBe(u);
+  });
+
+  it('moves a marker, keeping order and a range marker\'s length', () => {
+    let t = addMarker(addMarker(t0(), { frame: 10, id: 'a' }), { frame: 50, id: 'b', duration: 20 });
+    t = moveMarker(t, 'b', 5.6);
+    expect(t.markers.map((m) => [m.id, m.frame, m.duration])).toEqual([
+      ['b', 6, 20],
+      ['a', 10, undefined],
+    ]);
+    expect(moveMarker(t, 'a', -40).markers.find((m) => m.id === 'a')!.frame).toBe(0);
+    expect(moveMarker(t, 'a', 10)).toBe(t);
+  });
+
+  it('ripple: markers follow main-track ripples but not single-track ones elsewhere', () => {
+    let t = withClips(clip('a', 0, 100), clip('b', 100, 100), clip('o', 0, 200, { trackId: 'v2' }));
+    t = { ...t, markers: [{ id: 'p', frame: 150, label: 'P' }, { id: 'r', frame: 50, label: 'R', duration: 100 }] };
+    // Closing [80,120) on the main track alone (magnet on, linkage off) still moves markers.
+    const main = closeRange(t, 80, 120, 'v1');
+    expect(main.markers.map((m) => [m.id, m.frame, m.duration])).toEqual([
+      ['p', 110, undefined],
+      ['r', 50, 60],
+    ]);
+    // A range marker that starts inside the removed span begins where it was cut.
+    expect(closeRange(t, 40, 60).markers.find((m) => m.id === 'r')).toMatchObject({ frame: 40, duration: 90 });
+    // Closing on another track leaves markers alone.
+    expect(closeRange(t, 80, 120, 'v2').markers).toEqual(t.markers);
+    // Opening room before a marker pushes it; a range marker spanning the point grows.
+    const opened = openRange(t, 100, 30, undefined, 'v1');
+    expect(opened.markers.map((m) => [m.id, m.frame, m.duration])).toEqual([
+      ['p', 180, undefined],
+      ['r', 50, 130],
+    ]);
+    expect(openRange(t, 100, 30, undefined, 'v2').markers).toEqual(t.markers);
+    // Ripple trimming on the main track moves markers the same way as the clips after it.
+    const trimmed = rippleTrim(t, 'a', 'end', 90, undefined, 'v1');
+    expect(trimmed.clips.find((c) => c.id === 'b')!.start).toBe(90);
+    expect(trimmed.markers.find((m) => m.id === 'p')!.frame).toBe(140);
+  });
+
+  it('snaps to range marker ends', () => {
+    const t = { ...t0(), markers: [{ id: 'r', frame: 100, label: 'R', duration: 50 }] };
+    expect(snapPoints(t)).toEqual(expect.arrayContaining([100, 150]));
+  });
+
+  it('crops range markers to a kept range', () => {
+    const t = { ...t0(), markers: [{ id: 'r', frame: 100, label: 'R', duration: 100 }, { id: 'p', frame: 10, label: 'P' }] };
+    expect(cropRange(t, 150, 400).markers).toEqual([{ id: 'r', frame: 0, label: 'R', duration: 50 }]);
+  });
+});
+
+describe('chapters from markers', () => {
+  const fps = 30;
+  const at = (sec: number, label: string, extra: Partial<Marker> = {}): Marker => ({ id: label, frame: sec * fps, label, ...extra });
+  const tl = (markers: Marker[], seconds = 600) => ({ ...withClips(clip('a', 0, seconds * fps)), markers });
+
+  it('lists point markers as 0:00 lines and adds an intro at 0:00', () => {
+    const c = chaptersFromMarkers(tl([at(75, 'Setup'), at(30, 'Hook'), at(3725, 'Late')], 4000));
+    expect(c.text).toBe('0:00 Intro\n0:30 Hook\n1:15 Setup\n1:02:05 Late');
+    expect(c.skipped).toEqual([]);
+    expect(c.tooFew).toBe(false);
+  });
+
+  it('moves an early marker to 0:00 instead of adding an intro', () => {
+    const c = chaptersFromMarkers(tl([at(4, 'Cold open'), at(40, 'Main')]));
+    expect(c.text).toBe('0:00 Cold open\n0:40 Main');
+    expect(c.tooFew).toBe(true);
+  });
+
+  it('skips markers closer than 10 s to the chapter before or to the end, and ignores range markers', () => {
+    const c = chaptersFromMarkers(
+      tl([at(20, 'A'), at(25, 'Too soon'), at(30, 'B'), at(45, 'Range', { duration: 300 }), at(595, 'Tail')]),
+    );
+    expect(c.chapters.map((x) => x.label)).toEqual(['Intro', 'A', 'B']);
+    expect(c.skipped.map((x) => x.label)).toEqual(['Too soon', 'Tail']);
+  });
+
+  it('gives nothing without point markers', () => {
+    expect(chaptersFromMarkers(tl([])).text).toBe('');
+    expect(chapterTime(59 * fps + 29, fps)).toBe('0:59');
+  });
+});
+
+describe('render ranges', () => {
+  it('checks a range against the timeline', () => {
+    expect(renderRange(undefined, 300)).toBeNull();
+    expect(renderRange({ start: 0, end: 300 }, 300)).toBeNull();
+    expect(renderRange({ start: 30.2, end: 90.7 }, 300)).toEqual({ start: 30, end: 91 });
+    expect(renderRange({ start: -10, end: 900 }, 300)).toBeNull();
+    expect(renderRange({ start: 100 }, 300)).toEqual({ start: 100, end: 300 });
+    expect(() => renderRange({ start: 200, end: 100 }, 300)).toThrow(/empty/);
+    expect(() => renderRange({ start: 'x' }, 300)).toThrow();
+    expect(() => renderRange('0-10', 300)).toThrow();
+  });
+
+  it('makes a still one frame long', () => {
+    expect(renderRange({ start: 42 }, 300, true)).toEqual({ start: 42, end: 43 });
+    expect(renderRange(null, 300, true)).toEqual({ start: 0, end: 1 });
+    expect(() => renderRange({ start: 300 }, 300, true)).toThrow(/past the end/);
+  });
+
+  it('names outputs by preset and keeps stills off watch pages', () => {
+    expect([renderExt('mp4-720p'), renderExt('audio-mp3'), renderExt('still-png')]).toEqual(['mp4', 'mp3', 'png']);
+    expect(renderMime('still-png')).toBe('image/png');
   });
 });
