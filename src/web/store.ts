@@ -90,7 +90,7 @@ export interface EditorState {
    */
   tool: 'select' | 'razor' | 'forward' | 'backward';
   /** Which side panel tab is open. */
-  panel: 'inspector' | 'comments' | 'history' | 'export';
+  panel: 'inspector' | 'transcript' | 'comments' | 'history' | 'export';
   /** Preview shuttle speed (J/K/L); negative plays backwards. */
   playbackRate: number;
   /** Soloed tracks: while any is soloed, the preview plays only their sound. Kept in this tab, never saved. */

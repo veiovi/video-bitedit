@@ -21,6 +21,8 @@ import { mediaUrl } from '../api';
 import { analyseClipColor } from '../autocolor';
 import { activeTimeline, detachSelection, replaceWithAsset, setClipSpeed, useEditor } from '../store';
 import { HelpTip } from './Help';
+import { CaptionLookPicker } from './CaptionLookPicker';
+import { WORDS_PER_LINE, wordsPerLine } from '../../shared/captionLooks';
 import { SHORTCUTS, type TipId } from '../help';
 
 // Continuous controls (sliders, typing) preview every change and record one
@@ -169,14 +171,39 @@ function Section({ title, children, open = true, help }: { title: string; childr
 /** Caption clips: the words come from the transcript; only the look is edited here. */
 function CaptionFields({ clip, disabled }: { clip: Clip; disabled: boolean }) {
   const theme = useEditor((s) => s.doc.theme);
+  const frameSize = useEditor((s) => {
+    const t = activeTimeline(s);
+    return `${t.width}x${t.height}`;
+  });
+  const [width, height] = frameSize.split('x').map(Number);
   const t = clip.text!;
   const set = (patch: Partial<TextStyle>) => liveClip(clip.id, { text: { ...t, ...patch } });
   const words = clip.words ?? [];
+  const oneWord = t.captionLook === 'oneWord';
   return (
     <>
       <p className="caption-words">
         {words.length} words: {words.map((w) => w.text).join(' ')}
       </p>
+      <CaptionLookPicker
+        style={t}
+        themeId={theme}
+        frameSize={{ width, height }}
+        disabled={disabled}
+        onChange={(patch) => {
+          set(patch);
+          endGesture();
+        }}
+      />
+      <Slider
+        label="Words / line"
+        value={oneWord ? 1 : wordsPerLine(t)}
+        min={WORDS_PER_LINE.min}
+        max={WORDS_PER_LINE.max}
+        step={1}
+        disabled={disabled || oneWord}
+        onChange={(v) => set({ wordsPerLine: v })}
+      />
       <Slider label="Size" value={t.fontSize} min={16} max={300} step={1} disabled={disabled} onChange={(v) => set({ fontSize: v })} />
       <Slider label="Weight" value={t.fontWeight} min={300} max={900} step={100} disabled={disabled} onChange={(v) => set({ fontWeight: v })} />
       <label className="field">
@@ -194,11 +221,12 @@ function CaptionFields({ clip, disabled }: { clip: Clip; disabled: boolean }) {
         </button>
       </label>
       <label className="field">
-        <span>Spoken word</span>
+        <span>Accent</span>
         <input
           type="color"
           value={t.highlight ?? getTheme(theme).presets.caption.highlight ?? '#ffd84d'}
           disabled={disabled}
+          title="The spoken word, the karaoke fill and the highlight box"
           onChange={(e) => set({ highlight: e.target.value })}
           onBlur={endGesture}
         />

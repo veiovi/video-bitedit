@@ -3,6 +3,7 @@
 
 import type React from 'react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { COMMANDS, PALETTE_KEYS } from '../commands';
 import { SECTIONS, SHORTCUTS, TIPS, type TipId } from '../help';
 
 const OPEN_EVENT = 'videdit:help';
@@ -176,6 +177,9 @@ export function HelpDialog() {
             <button className={section === 'keys' ? 'on' : ''} onClick={() => go('keys')}>
               Keyboard shortcuts
             </button>
+            <button className={section === 'commands' ? 'on' : ''} onClick={() => go('commands')}>
+              Commands
+            </button>
           </nav>
           <div className="help-body" ref={body}>
             {SECTIONS.map((s) => (
@@ -206,6 +210,18 @@ export function HelpDialog() {
                   <div key={keys}>
                     <dt>{keys}</dt>
                     <dd>{what}</dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+            <section id="help-commands">
+              <h3>Commands</h3>
+              <p>Every command is in the command palette: press {PALETTE_KEYS} and type part of its name.</p>
+              <dl>
+                {COMMANDS.map((c) => (
+                  <div key={c.id}>
+                    <dt>{'keys' in c ? c.keys : '—'}</dt>
+                    <dd>{c.title}</dd>
                   </div>
                 ))}
               </dl>

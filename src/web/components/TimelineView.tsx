@@ -54,6 +54,8 @@ import {
 } from '../../shared/project';
 import { defaultTextStyle, type TextPreset } from '../../shared/themes';
 import { peaksUrl, thumbUrl } from '../api';
+import { ClipFrames } from './Filmstrip';
+import { TranscriptRangeMark } from './TranscriptPanel';
 import { Icon } from './Icon';
 import {
   activeTimeline,
@@ -998,6 +1000,7 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
               onPointerMove={onRulerPointer}
             >
               <Ruler width={contentWidth} fps={timeline.fps} pxPerFrame={px} />
+              <TranscriptRangeMark px={px} />
               {loopSpan && (
                 <div
                   className="loop-range"
@@ -1449,7 +1452,7 @@ const ClipView = memo(function ClipView({
       onContextMenu={(e) => onContextMenu(e, clip)}
       title={`${label}${clip.disabled ? ' (turned off)' : ''}\n${formatTimecode(clip.start, fps)} → ${formatTimecode(clip.start + clip.duration, fps)} (${(clip.duration / fps).toFixed(2)}s)`}
     >
-      {thumb && (clip.kind === 'video' || clip.kind === 'image') && <div className="clip-thumb" style={{ backgroundImage: `url(${thumb})` }} />}
+      <ClipFrames clip={clip} asset={asset} projectId={projectId} px={px} fps={fps} thumb={thumb} />
       {wave && <Waveform peaks={wave} clip={clip} fps={fps} width={width} />}
       {(clip.fadeIn ?? 0) > 0 && <div className="fade in" style={{ width: (clip.fadeIn ?? 0) * px }} />}
       {(clip.fadeOut ?? 0) > 0 && <div className="fade out" style={{ width: (clip.fadeOut ?? 0) * px }} />}

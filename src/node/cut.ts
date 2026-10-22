@@ -3,6 +3,7 @@
 // resolves file names to asset IDs, and places them on tracks.
 
 import { type Transcript, captionClipsFor } from '../shared/captions';
+import { CAPTION_LOOKS, type CaptionPosition, captionY } from '../shared/captionLooks';
 import { addClip, addTrack, cropRange, deriveTimeline } from '../shared/edits';
 import {
   type Clip,
@@ -76,8 +77,13 @@ export type CaptionsSpec =
   | {
       /** Video track for the caption clips; defaults to the top video track. */
       track?: string;
-      /** Overrides for the theme's caption look, e.g. { "y": 0.6, "highlight": "#00e5ff" }. */
+      /**
+       * Overrides for the theme's caption look, e.g. { "captionLook": "karaoke",
+       * "wordsPerLine": 3, "highlight": "#00e5ff" } (see shared/captionLooks.ts).
+       */
       style?: Partial<TextStyle>;
+      /** Where the lines sit, inside the platform safe area for the frame shape; overrides style.y. */
+      position?: CaptionPosition;
     };
 
 export interface CutList {
@@ -327,7 +333,19 @@ export function addCaptions(t: Timeline, spec: CaptionsSpec, project: Pick<Proje
     ? videoTracks.find((x) => x.name.toLowerCase() === opts.track!.toLowerCase() || x.id === opts.track)
     : videoTracks[0];
   if (!track) throw new Error(`timeline "${name}": captions need a video track${opts.track ? ` named "${opts.track}"` : ''}`);
-  const style: TextStyle = { ...captionStyle(project, t), ...opts.style, text: '' };
+  const look = opts.style?.captionLook;
+  if (look && !CAPTION_LOOKS.some((l) => l.id === look)) {
+    throw new Error(`timeline "${name}": unknown caption look "${look}" (use ${CAPTION_LOOKS.map((l) => l.id).join(', ')})`);
+  }
+  if (opts.position && !['top', 'middle', 'bottom'].includes(opts.position)) {
+    throw new Error(`timeline "${name}": caption position must be top, middle or bottom`);
+  }
+  const style: TextStyle = {
+    ...captionStyle(project, t),
+    ...opts.style,
+    ...(opts.position && { y: captionY(opts.position, t) }),
+    text: '',
+  };
   let doc: Timeline = { ...t, clips: t.clips.filter((c) => c.kind !== 'caption') };
   const captions = captionClipsFor(doc, ctx.transcripts ?? {}, (range, words) => ({
     id: newId(),

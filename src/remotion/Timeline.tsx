@@ -22,11 +22,12 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
-import { activeWordIndex, chunkCaptions } from '../shared/captions';
+import { captionLines } from '../shared/captionLooks';
+import { CaptionLineView } from './CaptionLine';
 import { type Clip, type Timeline, type Transition, clipSpeed, fadeEnvelope, framing } from '../shared/project';
 import { applyEffects, enterTransition, exitTransition } from './effects';
 import { SlideClip } from './Slide';
-import { TITLE_FONT_FACES, easeOutBack, getTheme, textMotion } from '../shared/themes';
+import { TITLE_FONT_FACES, getTheme, textMotion } from '../shared/themes';
 
 /** Hold rendering until the title fonts are loaded, so text never renders in a fallback face. */
 function useTitleFonts(needed: boolean) {
@@ -87,57 +88,23 @@ const TextClip: React.FC<{ clip: Clip; themeId?: string }> = ({ clip, themeId })
   );
 };
 
-/** Caption words as 3–4 word lines, with the spoken word in the highlight colour. */
+/** Caption words as short lines, animated in the clip's caption look (see shared/captionLooks.ts). */
 const CaptionClip: React.FC<{ clip: Clip; themeId?: string }> = ({ clip, themeId }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
-  const lines = useMemo(() => chunkCaptions(clip.words ?? [], fps), [clip.words, fps]);
-  const line = lines.find((l) => frame >= l.start && frame < l.end);
-  if (!line || !clip.text) return null;
   const t = clip.text;
+  const lines = useMemo(
+    () => captionLines(clip.words ?? [], fps, { captionLook: t?.captionLook, wordsPerLine: t?.wordsPerLine }),
+    [clip.words, fps, t?.captionLook, t?.wordsPerLine],
+  );
+  const line = lines.find((l) => frame >= l.start && frame < l.end);
+  if (!line || !t) return null;
   const theme = getTheme(themeId);
-  const highlight = t.highlight ?? theme.presets.caption.highlight ?? '#ffd84d';
-  const active = activeWordIndex(line, frame);
-  // Each line pops in over a few frames.
-  const pop = easeOutBack((frame - line.start) / Math.max(1, Math.round(fps * 0.18)));
+  const accent = t.highlight ?? theme.presets.caption.highlight ?? '#ffd84d';
   const opacity = (clip.opacity ?? 1) * fadeEnvelope(clip, frame) * Math.min(1, (frame - line.start + 1) / 3);
-  const boxed = t.background !== 'transparent';
   return (
     <AbsoluteFill style={{ opacity }}>
-      <div
-        style={{
-          position: 'absolute',
-          left: `${t.x * 100}%`,
-          top: `${t.y * 100}%`,
-          transform: `translate(-50%, -50%) scale(${(clip.scale ?? 1) * (0.9 + 0.1 * pop)}) rotate(${clip.rotation ?? 0}deg)`,
-          fontSize: t.fontSize,
-          fontWeight: t.fontWeight,
-          color: t.color,
-          background: t.background,
-          padding: boxed ? '0.15em 0.45em' : 0,
-          borderRadius: '0.14em',
-          fontFamily: t.fontFamily ?? theme.fontFamily,
-          textShadow: boxed ? undefined : '0 0.05em 0.4em rgba(0,0,0,0.75), 0 0 0.14em rgba(0,0,0,0.9)',
-          textAlign: 'center',
-          lineHeight: 1.15,
-          width: 'max-content',
-          maxWidth: '86%',
-        }}
-      >
-        {line.words.map((w, i) => (
-          <span
-            key={`${w.start}-${i}`}
-            style={{
-              display: 'inline-block',
-              color: i === active ? highlight : undefined,
-              transform: i === active ? 'scale(1.05)' : undefined,
-              marginRight: i < line.words.length - 1 ? '0.3em' : 0,
-            }}
-          >
-            {w.text}
-          </span>
-        ))}
-      </div>
+      <CaptionLineView line={line} frame={frame} fps={fps} style={t} fontFamily={theme.fontFamily} accent={accent} scale={clip.scale ?? 1} rotation={clip.rotation ?? 0} />
     </AbsoluteFill>
   );
 };

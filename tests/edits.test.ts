@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addClip, addTrack, adjacentEditPoint, boundaryNear, canReplace, clipsFrom, closeGaps, closeRange, cropRange, deleteClips, deleteSide, deriveTimeline, detachAudio, gapAt, insertClip, mainTrackId, moveClip, moveClips, moveMainClip, pasteClips, replaceClipMedia, replaceProblem, rippleDeleteClips, rippleTrim, setFade, setVolume, MAX_VOLUME, splitAt, toggleClipsEnabled, trimClip } from '../src/shared/edits';
-import { clipAttributes, freezeFrame, pasteAttributes, renameTrack, reorderTrack, rollEdit, setSpeed, slipClip, trimToFrame, updateTrack } from '../src/shared/edits';
+import { addClip, addTrack, adjacentEditPoint, boundaryNear, canReplace, clipAttributes, clipsFrom, closeGaps, closeRange, cropRange, cutRange, cutRanges, deleteClips, deleteSide, deriveTimeline, detachAudio, freezeFrame, gapAt, insertClip, mainTrackId, MAX_VOLUME, moveClip, moveClips, moveMainClip, pasteAttributes, pasteClips, renameTrack, reorderTrack, replaceClipMedia, replaceProblem, restoreSourceGap, rippleDeleteClips, rippleTrim, rollEdit, setFade, setSpeed, setVolume, slipClip, splitAt, toggleClipsEnabled, trimClip, trimToFrame, updateTrack } from '../src/shared/edits';
 import { clipWords } from '../src/shared/captions';
 import { type Clip, type PublishedVideo, TRACK_LIMITS, type Timeline, aspectLabel, emptyTimeline, framing, parseTimecode, pickVersions, trackColor, withSolo } from '../src/shared/project';
 
@@ -845,5 +844,70 @@ describe('track headers', () => {
     expect(reorderTrack(emptyTimeline(), 'a2', -5).tracks.map((x) => x.id)).toEqual(['v3', 'v2', 'v1', 'a2', 'a1', 'a3', 'a4']);
     const locked = updateTrack(emptyTimeline(), 'v1', { locked: true });
     expect(reorderTrack(locked, 'v1', 0)).toBe(locked);
+  });
+});
+
+describe('text-based cuts', () => {
+  const twoTracks = () => {
+    let t = withClips(clip('a', 0, 300));
+    t = addClip(t, { id: 'cap', kind: 'caption', trackId: 'v2', start: 0, duration: 300, words: [{ text: 'hi', start: 10, end: 20 }, { text: 'there', start: 120, end: 140 }] });
+    return t;
+  };
+
+  it('cutRange removes the frames from every unlocked track and closes the gap', () => {
+    const t = cutRange(twoTracks(), 100, 150);
+    expect(spans(t)).toEqual([
+      [0, 100, 0],
+      [100, 250, 150],
+    ]);
+    const caps = t.clips.filter((c) => c.trackId === 'v2');
+    expect(caps.map((c) => [c.start, c.duration])).toEqual([
+      [0, 100],
+      [100, 150],
+    ]);
+    // "there" (120–140) was inside the cut, so it is gone.
+    expect(caps.flatMap((c) => c.words?.map((w) => w.text) ?? [])).toEqual(['hi']);
+  });
+
+  it('cutRange leaves locked tracks alone', () => {
+    const base = updateTrack(twoTracks(), 'v2', { locked: true });
+    const t = cutRange(base, 100, 150);
+    expect(t.clips.filter((c) => c.trackId === 'v2').map((c) => [c.start, c.duration])).toEqual([[0, 300]]);
+  });
+
+  it('cutRanges merges overlapping ranges and cuts them in one edit', () => {
+    const t = cutRanges(withClips(clip('a', 0, 300)), [
+      [200, 250],
+      [10, 20],
+      [15, 30],
+    ]);
+    expect(spans(t)).toEqual([
+      [0, 10, 0],
+      [10, 180, 30],
+      [180, 230, 250],
+    ]);
+  });
+
+  it('cutRanges ignores empty ranges', () => {
+    const t = withClips(clip('a', 0, 100));
+    expect(cutRanges(t, [[50, 50]])).toBe(t);
+  });
+
+  it('restoreSourceGap undoes a cut on the media, even after later edits', () => {
+    let t = cutRange(withClips(clip('a', 0, 300), clip('b', 300, 100, { in: 1000 })), 100, 150);
+    t = cutRange(t, 300, 320);
+    const left = t.clips.find((c) => c.start === 0)!;
+    t = restoreSourceGap(t, 100, 50, [left.id]);
+    expect(spans(t)).toEqual([
+      [0, 150, 0],
+      [150, 300, 150],
+      [300, 350, 1000],
+      [350, 380, 1070],
+    ]);
+  });
+
+  it('restoreSourceGap needs a clip ending at the cut', () => {
+    const t = withClips(clip('a', 0, 100));
+    expect(restoreSourceGap(t, 50, 10, ['a'])).toBe(t);
   });
 });

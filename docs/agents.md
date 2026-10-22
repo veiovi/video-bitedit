@@ -16,7 +16,9 @@ videdit transcribe <folder>    # word-timed transcripts of the speech, made loca
 `info` scans the folder up to three levels deep and registers every video,
 audio and image file it finds. It skips `exports/`, `.videdit/` and dot
 folders. Each asset gets an ID, a kind, a duration in seconds and dimensions.
-Thumbnails and waveforms (for audio files and the sound of video files) are generated with FFmpeg.
+Thumbnails, filmstrips (a sprite of frames every 2 s, at most 60, for videos)
+and waveforms (for audio files and the sound of video files) are generated
+with FFmpeg.
 
 ### Transcripts
 
@@ -126,6 +128,21 @@ range at a vertical size and position (larger, at y = 0.7). Without it, the
 short keeps cropped copies of the main cut's captions. The words appear as
 lines of 3–4 words. A new line starts after punctuation or at a pause of
 140 ms or more, and the word being spoken takes the theme's highlight colour.
+
+**Caption looks.** The caption style also takes `captionLook`, how the words
+animate: `classic` (the default: the whole line, the spoken word in the
+accent colour), `karaoke` (words fill with the accent colour as they are
+spoken), `pop` (each word scales in as it is spoken), `bounce` (the spoken
+word hops up), `typewriter` (letters type on with the speech), `highlight` (a
+box in the accent colour behind the spoken word) or `oneWord` (one big word at
+a time). `wordsPerLine` (1–6, default 4) sets the longest line, and
+`highlight` is the accent colour. `"position": "top" | "middle" | "bottom"`
+next to `style` places the lines inside the platform safe area for the frame
+shape (on 9:16, bottom is y = 0.7 and top is y = 0.2), overriding `style.y`:
+
+```json
+"captions": { "track": "V3", "position": "bottom", "style": { "captionLook": "karaoke", "wordsPerLine": 3, "highlight": "#ffd84d" } }
+```
 
 **Snapping cuts to silence.** With `"snap": true` (on the file, a timeline or
 a clip), each `in` and `out` point moves to the frame boundary that lands in

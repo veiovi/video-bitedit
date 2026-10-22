@@ -1,3 +1,4 @@
+import type { CaptionLook } from './captionLooks';
 import type { TextAnimation, TextPreset } from './themes';
 
 // The project document: one shared asset bin and several timelines (for
@@ -20,9 +21,50 @@ export interface Asset {
   width: number | null;
   height: number | null;
   hasThumb: boolean;
+  /** Videos: a sprite of frames sampled through the file, served at /m/:id/a/:aid/filmstrip. */
+  filmstrip?: Filmstrip | null;
   /** `deleted` assets are hidden from the bin but kept, so older versions still play. */
   status: 'uploading' | 'ready' | 'deleted';
   createdAt: number;
+}
+
+/**
+ * A filmstrip sprite: `frames` frames side by side in one JPEG row, frame i
+ * showing the source at i × `every` seconds. `width` and `height` are one
+ * frame's size in pixels.
+ */
+export interface Filmstrip {
+  frames: number;
+  every: number;
+  width: number;
+  height: number;
+}
+
+export const FILMSTRIP = { every: 2, maxFrames: 60, width: 160 } as const;
+
+/** How to sample a video of `duration` seconds: a frame every 2 s, at most 60 frames. */
+export function filmstripPlan(duration: number): { frames: number; every: number } {
+  const d = Math.max(0, duration);
+  const every = Math.max(FILMSTRIP.every, Math.ceil((d / FILMSTRIP.maxFrames) * 100) / 100);
+  return { frames: Math.max(1, Math.min(FILMSTRIP.maxFrames, Math.ceil(d / every))), every };
+}
+
+/** Which sprite frame shows the source at `seconds`. */
+export function filmstripFrame(strip: Pick<Filmstrip, 'frames' | 'every'>, seconds: number): number {
+  return Math.max(0, Math.min(strip.frames - 1, Math.floor(seconds / strip.every)));
+}
+
+/** Shape check for filmstrip metadata received over the API or read from disk. */
+export function isFilmstrip(x: unknown): x is Filmstrip {
+  const f = x as Filmstrip;
+  return (
+    typeof f === 'object' &&
+    f !== null &&
+    [f.frames, f.every, f.width, f.height].every((n) => typeof n === 'number' && Number.isFinite(n) && n > 0) &&
+    f.frames <= FILMSTRIP.maxFrames &&
+    f.width <= 1000 &&
+    f.height <= 1000
+  );
 }
 
 export interface Track {
@@ -83,6 +125,10 @@ export interface TextStyle {
   fontFamily?: string;
   /** Caption clips: colour of the word being spoken; defaults to the theme's. */
   highlight?: string;
+  /** Caption clips: how the words animate (see shared/captionLooks.ts); defaults to classic. */
+  captionLook?: CaptionLook;
+  /** Caption clips: most words on a line, 1–6 (default 4). */
+  wordsPerLine?: number;
 }
 
 /** One caption word, in frames relative to its clip's start. */

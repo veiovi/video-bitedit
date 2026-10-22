@@ -1,4 +1,4 @@
-import type { Asset, Comment, HistoryEntry, ProjectDoc, ProjectRecord, PublishedVideo, RenderPresetId, RenderRecord, ServerInfo } from '../shared/project';
+import type { Asset, Comment, Filmstrip, HistoryEntry, ProjectDoc, ProjectRecord, PublishedVideo, RenderPresetId, RenderRecord, ServerInfo } from '../shared/project';
 
 const WORKSPACE_KEY = 'videdit.workspaceKey';
 const editKeyName = (projectId: string) => `videdit.edit.${projectId}`;
@@ -82,6 +82,8 @@ async function request<T>(method: string, path: string, opts: { projectId?: stri
 
 export const mediaUrl = (projectId: string, assetId: string) => `/m/${projectId}/a/${assetId}`;
 export const thumbUrl = (projectId: string, assetId: string) => `/m/${projectId}/a/${assetId}/thumb`;
+export const filmstripUrl = (projectId: string, assetId: string) => `/m/${projectId}/a/${assetId}/filmstrip`;
+export const transcriptUrl = (projectId: string, assetId: string) => `/m/${projectId}/a/${assetId}/transcript`;
 export const peaksUrl = (projectId: string, assetId: string) => `/m/${projectId}/a/${assetId}/peaks`;
 export const renderUrl = (projectId: string, renderId: string, download = false) =>
   `/m/${projectId}/r/${renderId}${download ? '?download=1' : ''}`;
@@ -109,6 +111,12 @@ export const api = {
     request<{ ok: true }>('PUT', `/api/p/${id}/assets/${assetId}/thumb`, { projectId: id, raw: jpeg }),
   putPeaks: (id: string, assetId: string, peaks: number[]) =>
     request<{ ok: true }>('PUT', `/api/p/${id}/assets/${assetId}/peaks`, { projectId: id, raw: JSON.stringify(peaks) }),
+  putFilmstrip: (id: string, assetId: string, strip: Filmstrip, jpeg: Blob) =>
+    request<{ asset: Asset }>(
+      'PUT',
+      `/api/p/${id}/assets/${assetId}/filmstrip?${new URLSearchParams(Object.entries(strip).map(([k, v]) => [k, String(v)]))}`,
+      { projectId: id, raw: jpeg },
+    ),
   renameAsset: (id: string, assetId: string, name: string) =>
     request<{ asset: Asset }>('PATCH', `/api/p/${id}/assets/${assetId}`, { projectId: id, body: { name } }),
   deleteAsset: (id: string, assetId: string) => request<{ ok: true }>('DELETE', `/api/p/${id}/assets/${assetId}`, { projectId: id }),
