@@ -3185,3 +3185,50 @@ button.help-more:hover:not(:disabled) {
     display: none;
   }
 }
+
+/* ---- Caption looks ---- */
+
+.look-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.look-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 4px;
+  min-width: 0;
+}
+
+.look-tile.on {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.look-preview {
+  position: relative;
+  height: 52px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(160deg, #3a4a52, #1a2226 60%, #2c2420);
+}
+
+.look-name {
+  font-size: 11px;
+  text-align: center;
+}
+
+.seg {
+  display: flex;
+  gap: 4px;
+  grid-column: 2 / -1;
+}
+
+.seg button.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}

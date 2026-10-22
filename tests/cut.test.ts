@@ -157,6 +157,29 @@ describe('cut list captions', () => {
     expect([style.y, style.fontSize]).toEqual([0.7, 78]);
   });
 
+  it('takes an animated caption look, words per line and a safe-area position', () => {
+    const doc = buildFromCutList(
+      {
+        timelines: [
+          {
+            name: 'Main',
+            format: 'vertical',
+            clips: [{ asset: 'intro' }],
+            captions: { position: 'top', style: { captionLook: 'karaoke', wordsPerLine: 2, highlight: '#00e5ff' } },
+          },
+        ],
+      },
+      assets,
+      undefined,
+      { transcripts },
+    );
+    const style = doc.timelines[0].clips.find((c) => c.kind === 'caption')!.text!;
+    expect([style.captionLook, style.wordsPerLine, style.highlight, style.y]).toEqual(['karaoke', 2, '#00e5ff', 0.2]);
+    expect(() =>
+      buildFromCutList({ clips: [{ asset: 'intro' }], captions: { style: { captionLook: 'sparkle' as never } } }, assets, undefined, { transcripts }),
+    ).toThrow(/unknown caption look/);
+  });
+
   it('asks for transcripts when there are none', () => {
     expect(() => buildFromCutList({ clips: [{ asset: 'intro' }], captions: 'auto' }, assets)).toThrow(/videdit transcribe/);
   });
