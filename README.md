@@ -92,10 +92,14 @@ below.
   markers, a click on the timecode takes a typed time (12.5, 1:05, +2), and
   ⌘-scroll or a pinch zooms around the pointer. Loop playback (⇧L) repeats
   the selected clips, or the whole timeline.
-- Copy, cut, paste at the playhead and duplicate (⌘C/X/V/D), ⌥-drag to drag a
+- Copy, cut, paste at the playhead and duplicate (⌘C/X/V/D), ⌥⇧-drag to drag a
   copy, nudge by a frame (, . or ⌥←/→), turn clips off without deleting them
   (⇧E), and a right-click menu for all of it. Drags show the new position or
   length and a line where the clip snapped.
+- Speed from 0.25× to 4×, freeze frames (⇧F), roll (⌥-drag a cut), slip
+  (⌥-drag a clip), trim to the playhead (⌥[ ⌥]), and copy and paste a clip's
+  look onto other clips (⌥⌘C, ⌥⌘V). Track headers rename, recolour,
+  resize and reorder.
 - Per-clip volume, fades, opacity, scale, position, rotation, and fit or fill
   cropping for reframing vertical shorts. Per-track volume, mute, solo, hide
   and lock. Solo is for listening: it changes what the preview plays, never

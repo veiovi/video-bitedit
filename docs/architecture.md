@@ -11,8 +11,14 @@ The model lives in `src/shared/project.ts`.
 - **Timeline**: `{ id, name, fps, width, height, background, tracks[], clips[], markers[] }`.
   Tracks are listed top to bottom, and higher video tracks draw over lower
   ones. There can be up to 10 video tracks and 8 audio tracks.
-- **Clip**: `{ id, kind, trackId, start, duration, assetId?, in?, volume?, muted?, disabled?, fadeIn?, fadeOut?, opacity?, scale?, rotation?, offsetX?, offsetY?, fit?, text?, words? }`.
-  All times are integer frames. `in` is the offset into the source. Kinds
+- **Clip**: `{ id, kind, trackId, start, duration, assetId?, in?, volume?, muted?, disabled?, fadeIn?, fadeOut?, opacity?, scale?, rotation?, offsetX?, offsetY?, fit?, text?, words?, speed?, freeze? }`.
+  All times are integer frames. `in` is the offset into the source, in
+  source frames. `speed` (video and audio, 0.25–4, default 1) plays
+  `duration × speed` source frames from `in`; `clipSpeed` gives it, and the
+  edit ops move `in` by timeline frames × speed. A `freeze` clip is a silent
+  video clip that holds the source frame at `in` for its whole length
+  (`clipSpeed` 0). Tracks may carry `color` and a row `height` (small or
+  large) for the editor. Kinds
   are `video`, `audio`, `image`, `text` and `caption`. An audio clip may play
   a video asset's sound: Detach audio (`detachAudio`) adds one on a free audio
   track and sets `muted` on the video clip. A `disabled` clip stays on the
@@ -63,7 +69,7 @@ The model lives in `src/shared/project.ts`.
     A move snaps by whichever edge finds a snap point, measured against the
     timeline as it was when the drag began, and a dashed line shows where.
   - **Clipboard.** ⌘C/⌘X/⌘V/⌘D copy, cut, paste at the playhead and duplicate
-    after the selection (`pasteClips`), and ⌥-drag drags copies. The
+    after the selection (`pasteClips`), and ⌥⇧-drag drags copies. The
     clipboard lives in the tab. Copies keep their tracks and offsets; with the
     magnet on, copies that land on the main track insert instead of
     overwriting. A right-click menu offers the same actions, and "Paste here"
@@ -83,6 +89,39 @@ The model lives in `src/shared/project.ts`.
     (`loopRange`) or the whole timeline: the player loops the timeline, and
     leaving the selection while playing seeks back to its start (its end when
     playing backwards). The ruler shades the looped stretch.
+  - **Timing.** Speed (`setSpeed`, from the inspector) keeps a clip's `in`
+    and the footage it plays, so its length scales; on the main track with
+    the magnet on, the rest ripples like an end trim, and elsewhere a longer
+    clip overwrites what follows. ⇧F (`freezeFrame`) splits a video clip at
+    the playhead and puts a two-second still of that exact source frame
+    there: an insert that ripples on the main track with the magnet on, an
+    overwrite elsewhere. The composition draws a still with `<Freeze>`
+    around the video, and plays sped-up or slowed clips with `playbackRate`.
+    Pitch is kept: the browser's media elements preserve it in the preview,
+    and the export time-stretches the audio. ⌥-dragging the cut between two
+    touching clips rolls it (`rollEdit`): one side longer, the other
+    shorter, each limited by its source. ⌥-dragging a video or audio clip
+    slips it (`slipClip`): the footage follows the pointer while the clip
+    stays put, and the preview seeks to the clip's first frame. ⌥⇧-drag
+    (or ⌥-drag of a clip that cannot slip, or of a multi-selection) drags a
+    copy. ⌥[ and ⌥] (also ⇧[ and ⇧]) trim the selection's start or end to
+    the playhead (`trimToFrame`), lengthening clips when the playhead is
+    outside them and the source allows; main-track clips ripple with the
+    magnet on.
+  - **Copy attributes.** ⌥⌘C takes the selected clip's look
+    (`clipAttributes`: effects, transition, opacity, transform, speed and
+    volume) and ⌥⌘V pastes it onto every selected clip
+    (`pasteAttributes`). Each clip takes what applies to its kind, and a
+    pasted effect replaces one of the same type.
+  - **Track headers.** Double-click a name to rename it (`renameTrack`; the
+    track keeps its colour). The stripe on the header's left opens eight
+    colour swatches, and clips take the track's colour with a stripe on
+    their left edge. The arrow button cycles the row height. Dragging a
+    header reorders tracks of its kind (`reorderTrack`); the bottom video
+    track is always the main track, so moving another there makes it main.
+  - **Timeline view.** Seeking stops at the last frame. Zoomed in past six
+    pixels per frame, the ruler marks every frame. Dragging a clip, an edge
+    or a selection box near the left or right edge scrolls the timeline.
   - **Gaps and files.** Clicking an empty stretch of the main track
     (when the magnet is off) selects it (`gapAt`), and Delete closes it.
     Overlay and audio tracks are free placement, so their gaps are never
