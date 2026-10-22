@@ -8,7 +8,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { isTranscript } from '../shared/captions';
-import { type Asset, type ProjectDoc, type ProjectRecord, type RenderPresetId, type RenderRecord, newId, usedAssetIds } from '../shared/project';
+import { type Asset, type FrameRange, type ProjectDoc, type ProjectRecord, type RenderPresetId, type RenderRecord, newId, renderExt, usedAssetIds } from '../shared/project';
 import type { CloudConfig } from './config';
 import { type LocalProject, type RemoteLink } from './local-project';
 import { renderTimeline } from './render';
@@ -232,7 +232,7 @@ export async function publishRender(
   file: string,
   preset: RenderPresetId,
   timelineId: string,
-  meta: { title: string; description: string },
+  meta: { title: string; description: string; range?: FrameRange | null },
 ): Promise<string> {
   const link = project.remote;
   if (!link) throw new Error('Push the project before publishing.');
@@ -266,8 +266,7 @@ export async function runWorker(config: CloudConfig, opts: { once?: boolean; pol
     const { render, doc } = job;
     const sources: Record<string, string> = {};
     for (const a of job.assets ?? []) sources[a.id] = `${config.serverUrl}/m/${render.projectId}/a/${a.id}`;
-    const ext = render.preset === 'audio-mp3' ? 'mp3' : 'mp4';
-    const output = path.join(os.tmpdir(), `videdit-${render.id}.${ext}`);
+    const output = path.join(os.tmpdir(), `videdit-${render.id}.${renderExt(render.preset)}`);
     log(`Rendering ${render.id} (${doc.title} · ${render.timelineName}, ${render.preset})`);
     try {
       let lastReport = 0;
@@ -277,6 +276,7 @@ export async function runWorker(config: CloudConfig, opts: { once?: boolean; pol
         sources,
         preset: render.preset,
         output,
+        range: render.range,
         onProgress: (progress) => {
           if (Date.now() - lastReport < 2000 && progress < 1) return;
           lastReport = Date.now();

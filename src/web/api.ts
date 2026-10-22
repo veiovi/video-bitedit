@@ -1,4 +1,4 @@
-import type { Asset, Comment, HistoryEntry, ProjectDoc, ProjectRecord, PublishedVideo, RenderPresetId, RenderRecord, ServerInfo } from '../shared/project';
+import type { Asset, Comment, FrameRange, HistoryEntry, ProjectDoc, ProjectRecord, PublishedVideo, RenderPresetId, RenderRecord, ServerInfo } from '../shared/project';
 
 const WORKSPACE_KEY = 'videdit.workspaceKey';
 const editKeyName = (projectId: string) => `videdit.edit.${projectId}`;
@@ -122,7 +122,11 @@ export const api = {
     request<{ ok: true }>('DELETE', `/api/p/${id}/comments/${commentId}`, { projectId: id }),
 
   listRenders: (id: string) => request<RenderRecord[]>('GET', `/api/p/${id}/renders`),
-  createRender: (id: string, preset: RenderPresetId, opts: { timelineId: string; publish: boolean; title?: string; description?: string }) =>
+  createRender: (
+    id: string,
+    preset: RenderPresetId,
+    opts: { timelineId: string; publish: boolean; title?: string; description?: string; range?: FrameRange | null },
+  ) =>
     request<RenderRecord>('POST', `/api/p/${id}/renders`, { projectId: id, body: { preset, ...opts } }),
   deleteRender: (id: string, renderId: string) => request<{ ok: true }>('DELETE', `/api/p/${id}/renders/${renderId}`, { projectId: id }),
   publishRender: (id: string, renderId: string, title: string, description: string) =>
