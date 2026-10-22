@@ -82,7 +82,7 @@ below.
   muted palette.
 - Move, trim, split (S or the razor tool), ripple delete (X) and lift (Z), all
   with snapping and undo/redo.
-- CapCut-style editing. The main-track magnet keeps V1 gapless: drops insert,
+- Magnetic editing. The main-track magnet keeps V1 gapless: drops insert,
   moves reorder, and cuts close up. Linkage keeps captions and cutaways in
   sync. Drag media onto a clip to replace it at the same length, choosing
   which part of a longer clip plays. Desktop files can go straight onto the

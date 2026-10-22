@@ -51,7 +51,7 @@ The model lives in `src/shared/project.ts`.
   a placed clip carves out the range it lands on. Split, trim, ripple delete,
   `deriveTimeline` (format conversion with crop to fill) and `cropRange`
   (highlight range) live there too.
-- **Timeline editing follows CapCut.**
+- **Timeline editing.**
   - **Main-track magnet** (P, on by default; the setting is kept per browser).
     The main track is the bottom video track (V1, `mainTrackId`), and it stays
     gapless. A drop on it inserts at the nearest clip edge and pushes

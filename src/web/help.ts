@@ -56,7 +56,7 @@ export const SECTIONS: HelpSection[] = [
       ['Select tool (V / A)', 'Click a clip to select it, ⇧-click to add, drag on empty space to box-select. Drag clips to move them; drag their edges to trim.'],
       ['Blade tool (C / B)', 'Click a clip to cut it there. S or ⌘B splits the selection (or every track) at the playhead; ⇧⌘B splits every track.'],
       ['Select forward / backward (] / [)', 'Click to select everything to the right (or left) of that point, then drag it all at once. ⇧-click picks one track only.'],
-      ['Magnet (P)', 'Keeps the main track gapless, like CapCut. Trims and deletes close up, drops insert between clips and push the rest right, and moving a clip reorders it. Turning it on closes existing gaps.'],
+      ['Magnet (P)', 'Keeps the main track gapless. Trims and deletes close up, drops insert between clips and push the rest right, and moving a clip reorders it. Turning it on closes existing gaps.'],
       ['Linkage (`)', 'When on, captions, overlays and audio above and below follow the main-track edits, so they stay in sync. When off, only the main track moves.'],
       ['Snapping (N)', 'Clips and the playhead snap to cuts, markers and the playhead. Hold ⌘ while dragging to ignore snapping for one drag.'],
       ['Delete', '⌫ deletes (main-track clips ripple while the magnet is on). X is ripple delete: close the gap. Z is lift: leave the gap. Q and W delete everything left or right of the playhead in the clip under it.'],

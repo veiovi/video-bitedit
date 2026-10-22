@@ -144,7 +144,7 @@ function draggedKind(dt: DataTransfer): { kind: DraggedKind | null; files: numbe
 }
 
 /**
- * Where a drop lands, following CapCut: onto a clip of the same family opens
+ * Where a drop lands: onto a clip of the same family opens
  * the replace dialog; onto the main track with the magnet on it inserts at
  * the nearest clip edge and pushes the rest right; anywhere else it places
  * the clip, overwriting what is there.
@@ -281,7 +281,7 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
   /** Box selection on empty timeline space, in pixels relative to the tracks area. */
   const marquee = useRef<{ x: number; y: number; additive: boolean; base: string[] } | null>(null);
   const [box, setBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
-  /** Holding ⌘/Ctrl during a drag turns snapping off, like CapCut. */
+  /** Holding ⌘/Ctrl during a drag turns snapping off. */
   const noSnap = useRef(false);
   /** While dragging: a readout of the new position, length or fade, and the snap line. */
   const [hud, setHud] = useState<{ x: number; y: number; text: string } | null>(null);

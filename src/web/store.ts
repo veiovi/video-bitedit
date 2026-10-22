@@ -208,7 +208,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   setRipple: (on) => {
     writeFlag(RIPPLE_KEY, on);
     set({ ripple: on });
-    // Like CapCut, turning the magnet on closes the main track's gaps.
+    // Turning the magnet on closes the main track's gaps.
     if (on) get().applyTimeline((t) => closeMainGaps(t, get().linkage));
   },
 

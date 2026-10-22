@@ -277,7 +277,7 @@ function useKeyboard() {
         else pasteAttributesToSelection();
         return;
       }
-      // CapCut's split: ⌘B splits the selection (or every track) at the playhead; ⇧⌘B splits every track.
+      // Split: ⌘B splits the selection (or every track) at the playhead; ⇧⌘B splits every track.
       if (mod && key === 'b') {
         e.preventDefault();
         s.applyTimeline((tl) => splitAt(tl, s.playhead, !e.shiftKey && s.selection.length ? s.selection : undefined));
