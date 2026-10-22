@@ -1,7 +1,7 @@
 // Browser-side media ingest: probe duration and size, make a thumbnail, then
 // upload in chunks small enough for the Worker's request limit.
 
-import type { Asset, AssetKind } from '../shared/project';
+import { type Asset, type AssetKind, FILMSTRIP, type Filmstrip, filmstripPlan } from '../shared/project';
 import { api } from './api';
 import { useEditor } from './store';
 import { applyPatches, locationPatches } from '../shared/location';
@@ -55,6 +55,52 @@ function canvasThumb(source: CanvasImageSource, w: number, h: number): Promise<B
   canvas.height = Math.max(1, Math.round(h * scale));
   canvas.getContext('2d')!.drawImage(source, 0, 0, canvas.width, canvas.height);
   return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+}
+
+/**
+ * A filmstrip sprite made by seeking a video element through the file and
+ * drawing each frame into one canvas row (see shared/project.ts Filmstrip).
+ */
+export async function makeFilmstrip(file: Blob): Promise<{ strip: Filmstrip; jpeg: Blob } | null> {
+  const url = URL.createObjectURL(file);
+  const el = document.createElement('video');
+  el.preload = 'auto';
+  el.muted = true;
+  el.src = url;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      el.onloadedmetadata = () => resolve();
+      el.onerror = () => reject(new Error('unreadable'));
+    });
+    if (!el.videoWidth || !Number.isFinite(el.duration) || el.duration <= 0) return null;
+    const { frames, every } = filmstripPlan(el.duration);
+    const width = FILMSTRIP.width;
+    const height = Math.max(2, Math.round((el.videoHeight / el.videoWidth) * width / 2) * 2);
+    const canvas = document.createElement('canvas');
+    canvas.width = width * frames;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d')!;
+    for (let i = 0; i < frames; i++) {
+      el.currentTime = Math.min(i * every, Math.max(0, el.duration - 0.05));
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        const timer = setTimeout(done, 3000);
+        el.onseeked = done;
+      });
+      ctx.drawImage(el, i * width, 0, width, height);
+    }
+    const jpeg = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.7));
+    return jpeg ? { strip: { frames, every, width, height }, jpeg } : null;
+  } catch {
+    return null;
+  } finally {
+    el.removeAttribute('src');
+    el.load();
+    URL.revokeObjectURL(url);
+  }
 }
 
 async function probe(file: File, kind: AssetKind): Promise<Probe> {
@@ -145,6 +191,17 @@ export async function uploadFile(projectId: string, file: File): Promise<Asset |
     if (meta.thumb) {
       await api.putThumb(projectId, asset.id, meta.thumb);
       done.asset.hasThumb = true;
+    }
+    // The local server makes its own with FFmpeg; the cloud stores the browser's.
+    if (kind === 'video' && !done.asset.filmstrip && useEditor.getState().server?.mode !== 'local') {
+      const made = await makeFilmstrip(file);
+      if (made) {
+        try {
+          done.asset = (await api.putFilmstrip(projectId, asset.id, made.strip, made.jpeg)).asset;
+        } catch {
+          // A server without filmstrip support: the timeline falls back to the thumbnail.
+        }
+      }
     }
     if (kind === 'audio' || kind === 'video') {
       const peaks = await audioPeaks(file);

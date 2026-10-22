@@ -22,6 +22,7 @@ import {
   type RenderRecord,
   emptyDoc,
   findTimeline,
+  isFilmstrip,
   newId,
   pickVersions,
   summariseDoc,
@@ -133,8 +134,20 @@ interface AssetRow {
   r2_key: string;
   upload_id: string | null;
   has_thumb: number;
+  /** JSON Filmstrip, or NULL (column added in migration 0003). */
+  filmstrip?: string | null;
   status: Asset['status'];
   created_at: number;
+}
+
+function parseFilmstrip(text: string | null | undefined): Asset['filmstrip'] {
+  if (!text) return null;
+  try {
+    const f: unknown = JSON.parse(text);
+    return isFilmstrip(f) ? f : null;
+  } catch {
+    return null;
+  }
 }
 
 function toAsset(r: AssetRow): Asset {
@@ -148,6 +161,7 @@ function toAsset(r: AssetRow): Asset {
     width: r.width,
     height: r.height,
     hasThumb: Boolean(r.has_thumb),
+    filmstrip: parseFilmstrip(r.filmstrip),
     status: r.status,
     createdAt: r.created_at,
   };
@@ -532,6 +546,21 @@ route('PUT', '/api/p/:id/assets/:aid/thumb', async (req, env, [id, aid]) => {
   return json({ ok: true });
 });
 
+// Filmstrip sprite (see shared/project.ts Filmstrip) made by the uploader; its
+// layout comes in the query string: ?frames=&every=&width=&height=.
+route('PUT', '/api/p/:id/assets/:aid/filmstrip', async (req, env, [id, aid], url) => {
+  await requireEdit(req, env, id);
+  const asset = await getAssetRow(env, id, aid);
+  if (asset.kind !== 'video') throw new HttpError(400, 'Only videos have filmstrips');
+  const meta = Object.fromEntries(['frames', 'every', 'width', 'height'].map((k) => [k, Number(url.searchParams.get(k))]));
+  if (!isFilmstrip(meta)) throw new HttpError(400, 'Expected frames, every, width and height');
+  const bytes = await req.arrayBuffer();
+  if (bytes.byteLength > 4_000_000) throw new HttpError(413, 'Filmstrip too large');
+  await env.MEDIA.put(asset.r2_key.replace(/source$/, 'filmstrip.jpg'), bytes, { httpMetadata: { contentType: 'image/jpeg' } });
+  await env.DB.prepare('UPDATE assets SET filmstrip = ? WHERE id = ?').bind(JSON.stringify(meta), aid).run();
+  return json({ asset: toAsset(await getAssetRow(env, id, aid)) });
+});
+
 // AI stills: generate with OpenRouter (default meta/muse-image) and store as an image asset.
 route('POST', '/api/p/:id/generate', async (req, env, [id]) => {
   await requireEdit(req, env, id);
@@ -604,7 +633,7 @@ route('DELETE', '/api/p/:id/assets/:aid', async (req, env, [id, aid]) => {
     await env.MEDIA.resumeMultipartUpload(asset.r2_key, asset.upload_id).abort().catch(() => undefined);
   }
   if (asset.status === 'uploading') {
-    await env.MEDIA.delete(['source', 'thumb.jpg', 'peaks.json', 'transcript.json'].map((f) => asset.r2_key.replace(/source$/, f)));
+    await env.MEDIA.delete(['source', 'thumb.jpg', 'filmstrip.jpg', 'peaks.json', 'transcript.json'].map((f) => asset.r2_key.replace(/source$/, f)));
     await env.DB.prepare('DELETE FROM assets WHERE id = ?').bind(aid).run();
   } else {
     // Hide from the bin but keep the media, so older versions of the timeline still play.
@@ -892,6 +921,11 @@ route('GET', '/m/:id/a/:aid', async (req, env, [id, aid]) => {
 route('GET', '/m/:id/a/:aid/thumb', async (req, env, [id, aid]) => {
   const asset = await getAssetRow(env, id, aid);
   return serveObject(req, env, asset.r2_key.replace(/source$/, 'thumb.jpg'));
+});
+
+route('GET', '/m/:id/a/:aid/filmstrip', async (req, env, [id, aid]) => {
+  const asset = await getAssetRow(env, id, aid);
+  return serveObject(req, env, asset.r2_key.replace(/source$/, 'filmstrip.jpg'));
 });
 
 route('GET', '/m/:id/a/:aid/peaks', async (req, env, [id, aid]) => {

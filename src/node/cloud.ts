@@ -131,7 +131,7 @@ export async function pushProject(project: LocalProject, config: CloudConfig, op
     const stale = remote.assets.find((a) => a.id === asset.id);
     if (stale) await call(config, 'DELETE', `/api/p/${link.projectId}/assets/${asset.id}`, { editKey: link.editKey });
     log(`Uploading ${asset.name} (${(asset.size / 1e6).toFixed(1)} MB)`);
-    const { path: _p, hasThumb: _h, status: _s, createdAt: _c, ...meta } = asset;
+    const { path: _p, hasThumb: _h, filmstrip: _f, status: _s, createdAt: _c, ...meta } = asset;
     await call(config, 'POST', `/api/p/${link.projectId}/assets`, { json: meta, editKey: link.editKey });
     const parts = await uploadInParts(file, (n, chunk) =>
       call(config, 'PUT', `/api/p/${link!.projectId}/assets/${asset.id}/parts/${n}`, { raw: chunk, editKey: link!.editKey }),
@@ -144,6 +144,23 @@ export async function pushProject(project: LocalProject, config: CloudConfig, op
         raw: await readFile(thumb),
         editKey: link.editKey,
       });
+    }
+  }
+
+  // Filmstrips go up for any video whose cloud copy has none. The Worker
+  // without migration 0003 refuses them; the push carries on without.
+  const remoteStrips = new Set(remote.assets.filter((a) => a.status === 'ready' && a.filmstrip).map((a) => a.id));
+  for (const asset of state.assets) {
+    if (!remoteIds.has(asset.id) || asset.kind !== 'video' || remoteStrips.has(asset.id)) continue;
+    await project.ensureFilmstrip(asset);
+    const strip = project.asset(asset.id)?.filmstrip;
+    const file = project.filmstripFile(asset.id);
+    if (!strip || !existsSync(file)) continue;
+    const query = new URLSearchParams(Object.entries(strip).map(([k, v]) => [k, String(v)]));
+    try {
+      await call(config, 'PUT', `/api/p/${link.projectId}/assets/${asset.id}/filmstrip?${query}`, { raw: await readFile(file), editKey: link.editKey });
+    } catch (err) {
+      log(`Skipped the filmstrip for ${asset.name}: ${(err as Error).message}`);
     }
   }
 

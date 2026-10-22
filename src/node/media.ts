@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import type { AssetKind } from '../shared/project';
+import { type AssetKind, FILMSTRIP, type Filmstrip, filmstripPlan } from '../shared/project';
 
 const run = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -104,6 +104,34 @@ export async function makeThumbnail(file: string, kind: AssetKind, duration: num
     return existsSync(out);
   } catch {
     return false;
+  }
+}
+
+/**
+ * A filmstrip sprite for a video: one frame every couple of seconds (see
+ * filmstripPlan), each FILMSTRIP.width pixels wide, side by side in one JPEG.
+ * Frame i shows the source at i × every seconds. Returns null when FFmpeg
+ * cannot read the video.
+ */
+export async function makeFilmstrip(file: string, duration: number | null, out: string): Promise<Filmstrip | null> {
+  if (!duration || duration <= 0) return null;
+  ffmpeg ??= findTool('ffmpeg');
+  ffprobe ??= findTool('ffprobe');
+  const { frames, every } = filmstripPlan(duration);
+  try {
+    await run(
+      ffmpeg.bin,
+      ['-y', '-v', 'error', '-i', file, '-an', '-vf', `fps=1/${every},scale=${FILMSTRIP.width}:-2,tile=${frames}x1`, '-frames:v', '1', '-q:v', '5', out],
+      { env: ffmpeg.env, maxBuffer: 10_000_000 },
+    );
+    const { stdout } = await run(ffprobe.bin, ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', out], {
+      env: ffprobe.env,
+    });
+    const [w, h] = stdout.trim().split(',').map(Number);
+    if (!(w > 0 && h > 0)) return null;
+    return { frames, every, width: Math.round(w / frames), height: h };
+  } catch {
+    return null;
   }
 }
 

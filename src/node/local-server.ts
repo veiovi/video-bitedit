@@ -193,6 +193,8 @@ export async function startLocalServer(project: LocalProject, opts: { port?: num
     if ((p = m('/api/p/:id')) && method === 'GET') {
       checkProject(p[1]);
       await project.scan();
+      // Videos imported before filmstrips existed get one in the background.
+      void project.backfillFilmstrips().catch(() => undefined);
       const s = project.state;
       return send(res, 200, {
         project: { id: s.id, title: s.doc.title, version: s.version, doc: s.doc, updatedAt: Date.now() },
@@ -262,8 +264,8 @@ export async function startLocalServer(project: LocalProject, opts: { port?: num
       project.saveTranscript({ ...t, assetId: p[2] });
       return send(res, 200, { ok: true });
     }
-    if ((p = m('/api/p/:id/assets/:aid/(thumb|peaks)')) && method === 'PUT') {
-      // Thumbnails and peaks are generated locally with FFmpeg; accept and ignore browser ones.
+    if ((p = m('/api/p/:id/assets/:aid/(thumb|peaks|filmstrip)')) && method === 'PUT') {
+      // Thumbnails, peaks and filmstrips are generated locally with FFmpeg; accept and ignore browser ones.
       await body(req);
       return send(res, 200, { ok: true });
     }
@@ -402,7 +404,7 @@ export async function startLocalServer(project: LocalProject, opts: { port?: num
   }
 
   async function handleMedia(req: http.IncomingMessage, res: http.ServerResponse, url: URL) {
-    let p = url.pathname.match(/^\/m\/([^/]+)\/a\/([^/]+)(\/thumb|\/peaks|\/transcript)?$/);
+    let p = url.pathname.match(/^\/m\/([^/]+)\/a\/([^/]+)(\/thumb|\/peaks|\/transcript|\/filmstrip)?$/);
     if (p) {
       const asset = project.asset(p[2]);
       if (!asset || p[1] !== project.state.id) throw new HttpError(404, 'Asset not found');
@@ -412,6 +414,7 @@ export async function startLocalServer(project: LocalProject, opts: { port?: num
         return serveFile(req, res, project.peaksFile(asset.id), { type: 'application/json' });
       }
       if (p[3] === '/transcript') return serveFile(req, res, project.transcriptFile(asset.id), { type: 'application/json' });
+      if (p[3] === '/filmstrip') return serveFile(req, res, project.filmstripFile(asset.id), { type: 'image/jpeg' });
       return serveFile(req, res, project.assetFile(asset));
     }
     p = url.pathname.match(/^\/m\/([^/]+)\/r\/([^/]+)$/);
