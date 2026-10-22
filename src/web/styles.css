@@ -2500,7 +2500,7 @@ h3 {
     right: 0;
     bottom: 0;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(6, 1fr);
     gap: 4px;
     padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
     background: var(--panel);
@@ -2689,7 +2689,7 @@ h3 {
 
 @media (max-width: 860px) {
   .mobile-tabs {
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(6, 1fr);
   }
 
   .mobile-tabs button {
@@ -2990,4 +2990,96 @@ button.help-more:hover:not(:disabled) {
   .asset-thumb .skim-video {
     display: none;
   }
+}
+
+/* ---- Transcript (text-based editing) ---- */
+
+.transcript-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 100%;
+}
+
+.transcript-bar {
+  position: sticky;
+  top: -4px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  background: var(--panel);
+  border-bottom: var(--border-w) solid var(--border);
+}
+
+.transcript-bar .hint {
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.transcript-body {
+  font-size: 14px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+  outline: none;
+  user-select: none;
+}
+
+.transcript-body p {
+  margin: 0 0 12px;
+}
+
+.transcript-body .word {
+  padding: 1px 2px;
+  border-radius: 3px;
+  cursor: text;
+}
+
+.transcript-body .word:hover {
+  background: var(--inset);
+}
+
+.transcript-body .word.now {
+  box-shadow: inset 0 -2px 0 var(--accent);
+  color: var(--text);
+}
+
+.transcript-body .word.sel {
+  background: var(--accent-soft);
+  outline: 1px solid var(--accent);
+}
+
+.transcript-body .cut-run {
+  padding: 1px 2px;
+  color: var(--faint);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--faint) 70%, transparent);
+}
+
+.transcript-body .cut-run.restorable {
+  cursor: pointer;
+}
+
+.transcript-body .cut-run.restorable:hover {
+  color: var(--dim);
+  background: var(--inset);
+}
+
+.transcript-empty {
+  font-size: 13px;
+  color: var(--dim);
+}
+
+.transcript-empty code {
+  font-size: 12px;
+}
+
+.text-range {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  border-inline: 1px solid var(--accent);
+  pointer-events: none;
 }

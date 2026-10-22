@@ -29,9 +29,10 @@ import { MediaBin } from './MediaBin';
 import { Preview } from './Preview';
 import { ReplaceDialog } from './ReplaceDialog';
 import { TimelineView } from './TimelineView';
+import { TranscriptPanel } from './TranscriptPanel';
 import { HelpButton, HelpTip } from './Help';
 
-type MobilePanel = 'media' | 'inspector' | 'comments' | 'history' | 'export';
+type MobilePanel = 'media' | 'inspector' | 'transcript' | 'comments' | 'history' | 'export';
 
 function SkinPicker() {
   const [skin, setSkin] = useState(currentSkin);
@@ -538,15 +539,16 @@ export function EditorPage({ projectId }: { projectId: string }) {
       <aside className="panel side">
         <div className="panel-head tabs">
           <span className="panel-num">03</span>
-          {(['inspector', 'comments', 'history', 'export'] as const).map((p) => (
+          {(['inspector', 'transcript', 'comments', 'history', 'export'] as const).map((p) => (
             <button key={p} className={`tab ${panel === p ? 'on' : ''}`} onClick={() => openPanel(p)}>
-              {p === 'inspector' ? 'Inspector' : p === 'comments' ? `Comments${timelineComments.length ? ` ${timelineComments.length}` : ''}` : p === 'history' ? 'History' : 'Export'}
+              {p === 'inspector' ? 'Inspector' : p === 'transcript' ? 'Transcript' : p === 'comments' ? `Comments${timelineComments.length ? ` ${timelineComments.length}` : ''}` : p === 'history' ? 'History' : 'Export'}
             </button>
           ))}
           <HelpTip id="side" />
         </div>
         <div className="side-body">
           {panel === 'inspector' && <InspectorPanel />}
+          {panel === 'transcript' && <TranscriptPanel />}
           {panel === 'comments' && <CommentsPanel comments={comments} reload={loadComments} />}
           {panel === 'history' && <HistoryPanel />}
           {panel === 'export' && <ExportPanel />}
@@ -556,13 +558,13 @@ export function EditorPage({ projectId }: { projectId: string }) {
       <TimelineView comments={timelineComments} />
 
       <nav className="mobile-tabs">
-        {(['media', 'inspector', 'comments', 'history', 'export'] as const).map((p) => (
+        {(['media', 'inspector', 'transcript', 'comments', 'history', 'export'] as const).map((p) => (
           <button
             key={p}
             className={mobile === p ? 'on' : ''}
             onClick={() => (p === 'media' ? setMobile('media') : openPanel(p))}
           >
-            {p === 'media' ? 'Media' : p === 'inspector' ? 'Edit' : p === 'comments' ? 'Notes' : p === 'history' ? 'History' : 'Export'}
+            {p === 'media' ? 'Media' : p === 'inspector' ? 'Edit' : p === 'transcript' ? 'Text' : p === 'comments' ? 'Notes' : p === 'history' ? 'History' : 'Export'}
           </button>
         ))}
       </nav>
@@ -574,4 +576,4 @@ export function EditorPage({ projectId }: { projectId: string }) {
   );
 }
 
-type EditorPanel = 'inspector' | 'comments' | 'history' | 'export';
+type EditorPanel = 'inspector' | 'transcript' | 'comments' | 'history' | 'export';

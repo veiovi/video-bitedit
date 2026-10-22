@@ -33,6 +33,7 @@ import { type Asset, type Clip, type Timeline, type Track, TRACK_LIMITS, clipEnd
 import { defaultTextStyle, type TextPreset } from '../../shared/themes';
 import { peaksUrl, thumbUrl } from '../api';
 import { ClipFrames } from './Filmstrip';
+import { TranscriptRangeMark } from './TranscriptPanel';
 import { Icon } from './Icon';
 import {
   activeTimeline,
@@ -789,6 +790,7 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
               onPointerMove={onRulerPointer}
             >
               <Ruler width={contentWidth} fps={timeline.fps} pxPerFrame={px} />
+              <TranscriptRangeMark px={px} />
               {loopSpan && (
                 <div
                   className="loop-range"
