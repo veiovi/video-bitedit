@@ -73,6 +73,10 @@ export interface EditorState {
   panel: 'inspector' | 'comments' | 'history' | 'export';
   /** Preview shuttle speed (J/K/L); negative plays backwards. */
   playbackRate: number;
+  /** Soloed tracks: while any is soloed, the preview plays only their sound. Kept in this tab, never saved. */
+  solo: string[];
+  /** Loop playback: repeat the selected clips, or the whole timeline when nothing is selected. */
+  loop: boolean;
 
   load(projectId: string, doc: ProjectDoc, version: number, assets: Asset[], canEdit: boolean): void;
   /** Apply an edit and record it for undo. */
@@ -121,8 +125,10 @@ export const useEditor = create<EditorState>((set, get) => ({
   tool: 'select',
   panel: 'inspector',
   playbackRate: 1,
+  solo: [],
+  loop: false,
 
-  load: (projectId, doc, version, assets, canEdit) =>
+  load:(projectId, doc, version, assets, canEdit) =>
     set({
       projectId,
       doc,
@@ -334,6 +340,26 @@ export function seekEdit(dir: -1 | 1) {
   const t = activeTimeline(s);
   const f = adjacentEditPoint(t, s.playhead, dir);
   if (f !== null) s.seek(Math.min(f, Math.max(0, timelineDuration(t) - 1)));
+}
+
+/** Solo a track, or take it out of solo. */
+export function toggleSolo(trackId: string) {
+  const { solo } = useEditor.getState();
+  useEditor.setState({ solo: solo.includes(trackId) ? solo.filter((id) => id !== trackId) : [...solo, trackId] });
+}
+
+/** The stretch loop playback repeats: the selected clips, or null for the whole timeline. */
+export function loopRange(state: Pick<EditorState, 'doc' | 'timelineId' | 'selection'>): { start: number; end: number } | null {
+  const picked = activeTimeline(state).clips.filter((c) => state.selection.includes(c.id));
+  if (picked.length === 0) return null;
+  return { start: Math.min(...picked.map((c) => c.start)), end: Math.max(...picked.map(clipEnd)) };
+}
+
+export function toggleLoop() {
+  const s = useEditor.getState();
+  const loop = !s.loop;
+  useEditor.setState({ loop });
+  s.setToast(loop ? `Loop on: repeats ${loopRange(s) ? 'the selected clips' : 'the whole timeline'}` : 'Loop off');
 }
 
 /** Zoom so the whole timeline fits the visible width. */

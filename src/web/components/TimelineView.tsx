@@ -13,6 +13,7 @@ import {
   closeRange,
   gapAt,
   insertClip,
+  MAX_VOLUME,
   mainTrackId,
   moveClip,
   moveClips,
@@ -20,6 +21,7 @@ import {
   removeTrack,
   rippleTrim,
   setFade,
+  setVolume,
   snap,
   snapPoints,
   splitAt,
@@ -39,11 +41,13 @@ import {
   detachSelection,
   detachable,
   duplicateSelection,
+  loopRange,
   pasteClipboard,
   replaceWithAsset,
   rippleScope,
   sourceFrames,
   toggleEnabledSelection,
+  toggleSolo,
   useEditor,
 } from '../store';
 import { kindOf, uploadFile } from '../upload';
@@ -63,9 +67,26 @@ function useHeaderWidth(): number {
     mq.addEventListener('change', on);
     return () => mq.removeEventListener('change', on);
   }, []);
-  return narrow ? 92 : 168;
+  return narrow ? 112 : 168;
 }
 const ROW_H = { video: 56, audio: 44 } as const;
+/** The volume line stays this many pixels inside the clip's top (MAX_VOLUME) and bottom (silent). */
+const VOLUME_PAD = 4;
+
+/**
+ * Where the volume line sits, 0 (top, MAX_VOLUME) to 1 (bottom, silent). A
+ * square-root scale puts 100% about a third of the way down, clear of the
+ * waveform's centre, and leaves more travel for quiet levels, like a fader.
+ */
+const volumeToY = (v: number) => 1 - Math.sqrt(Math.max(0, Math.min(v, MAX_VOLUME)) / MAX_VOLUME);
+const yToVolume = (y: number) => MAX_VOLUME * (1 - Math.max(0, Math.min(1, y))) ** 2;
+
+/** "85%  −1.4 dB" */
+function volumeLabel(v: number): string {
+  const db = v > 0 ? 20 * Math.log10(v) : -Infinity;
+  const dbText = db === -Infinity ? '−∞' : `${db > 0.05 ? '+' : db < -0.05 ? '−' : ''}${Math.abs(db).toFixed(1)}`;
+  return `Volume ${Math.round(v * 100)}%  ${dbText} dB`;
+}
 
 type DraggedKind = Asset['kind'] | 'text';
 
@@ -156,7 +177,7 @@ function Playhead({ height }: { height: number }) {
 }
 
 interface DragState {
-  kind: 'move' | 'trim-start' | 'trim-end' | 'fade-in' | 'fade-out';
+  kind: 'move' | 'trim-start' | 'trim-end' | 'fade-in' | 'fade-out' | 'volume';
   clipId: string;
   pointerX: number;
   pointerY: number;
@@ -168,6 +189,10 @@ interface DragState {
   moved: boolean;
   /** ⌥-drag: the clips being moved are fresh copies, and the originals stay. */
   duplicate: boolean;
+  /** Volume drags: how many pixels the line travels from MAX_VOLUME to silent, where it is (see volumeToY), and the last pointer y. */
+  volumeSpan: number;
+  volumeY: number;
+  lastY: number;
 }
 
 /** A right-click menu on a clip (acting on the selection) or on empty track space. */
@@ -210,8 +235,14 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
   const [menu, setMenu] = useState<MenuState | null>(null);
   const mainId = mainTrackId(timeline);
   const HEADER_W = useHeaderWidth();
+  const solo = useEditor((s) => s.solo);
+  const soloing = timeline.tracks.some((t) => solo.includes(t.id));
+  /** Tracks the preview cannot be heard from while others are soloed. */
+  const silenced = (t: Track) => soloing && !solo.includes(t.id);
+  const loop = useEditor((s) => s.loop);
 
   const duration = timelineDuration(timeline);
+  const loopSpan = loop ? (loopRange({ doc, timelineId, selection }) ?? { start: 0, end: duration }) : null;
   const contentWidth = Math.max((duration + timeline.fps * 20) * px, (scrollRef.current?.clientWidth ?? 1200) - HEADER_W);
   const assetById = useMemo(() => new Map(assets.map((a) => [a.id, a])), [assets]);
   const totalHeight = timeline.tracks.reduce((h, t) => h + ROW_H[t.kind], 0);
@@ -304,6 +335,7 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
       clip = { ...clip, id: copyOf.get(clip.id)! };
       group = group.map((id) => copyOf.get(id)!);
     }
+    const clipEl = (e.target as HTMLElement).closest('.clip');
     drag.current = {
       kind,
       clipId: clip.id,
@@ -315,6 +347,9 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
       group,
       moved: false,
       duplicate,
+      volumeSpan: Math.max(1, (clipEl?.getBoundingClientRect().height ?? 44) - 2 * VOLUME_PAD),
+      volumeY: volumeToY(clip.volume ?? 1),
+      lastY: e.clientY,
     };
   }
 
@@ -461,6 +496,13 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
       } else {
         next = gapless(moveClip(base, d.clipId, start, targetId));
       }
+    } else if (d.kind === 'volume') {
+      // The line follows the pointer; ⇧ moves it at a tenth of the speed for fine changes.
+      d.volumeY = Math.max(0, Math.min(1, d.volumeY + ((e.clientY - d.lastY) / d.volumeSpan) * (e.shiftKey ? 0.1 : 1)));
+      d.lastY = e.clientY;
+      // 100% is sticky within a few pixels, like a snap point.
+      const unity = snapping && !noSnap.current && !e.shiftKey && Math.abs(d.volumeY - volumeToY(1)) * d.volumeSpan < 3;
+      next = setVolume(base, d.clipId, unity ? 1 : yToVolume(d.volumeY));
     } else if (d.kind === 'fade-in' || d.kind === 'fade-out') {
       const c = d.baseClip;
       next = d.kind === 'fade-in' ? setFade(base, c.id, 'in', (c.fadeIn ?? 0) + dx) : setFade(base, c.id, 'out', (c.fadeOut ?? 0) - dx);
@@ -483,6 +525,7 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
     const secs = (f: number) => `${f < 0 ? '−' : '+'}${(Math.abs(f) / fps).toFixed(2)}s`;
     if (d.kind === 'fade-in') return `Fade in ${((c.fadeIn ?? 0) / fps).toFixed(2)}s`;
     if (d.kind === 'fade-out') return `Fade out ${((c.fadeOut ?? 0) / fps).toFixed(2)}s`;
+    if (d.kind === 'volume') return volumeLabel(c.volume ?? 1);
     if (d.kind === 'move') return `${d.duplicate ? 'Copy at ' : ''}${formatTimecode(c.start, fps)}  ${secs(c.start - d.baseClip.start)}`;
     return `Length ${(c.duration / fps).toFixed(2)}s  ${secs(c.duration - d.baseClip.duration)}`;
   }
@@ -745,6 +788,13 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
               onPointerMove={onRulerPointer}
             >
               <Ruler width={contentWidth} fps={timeline.fps} pxPerFrame={px} />
+              {loopSpan && (
+                <div
+                  className="loop-range"
+                  style={{ left: loopSpan.start * px, width: (loopSpan.end - loopSpan.start) * px }}
+                  title="Loop: playback repeats this stretch"
+                />
+              )}
               {timeline.markers.map((m) => (
                 <div
                   key={m.id}
@@ -766,7 +816,7 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
           <div className="tracks-row">
             <div className="track-headers" style={{ width: HEADER_W }}>
               {timeline.tracks.map((t) => (
-                <div key={t.id} className={`track-header ${t.kind}`} style={{ height: ROW_H[t.kind], ...tint(t.id) }}>
+                <div key={t.id} className={`track-header ${t.kind} ${silenced(t) ? 'silenced' : ''}`} style={{ height: ROW_H[t.kind], ...tint(t.id) }}>
                   <span
                     className={`track-badge ${t.kind} ${t.id === mainId ? 'main' : ''}`}
                     title={t.id === mainId ? 'Main track: the magnet keeps it gapless' : undefined}
@@ -794,6 +844,14 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
                         <Icon name={t.muted ? 'mute' : 'speaker'} />
                       </button>
                     )}
+                    <button
+                      className={`solo ${solo.includes(t.id) ? 'on' : ''}`}
+                      title={solo.includes(t.id) ? 'Stop soloing this track' : 'Solo: hear only this track (and other soloed ones) in the preview. The export is unchanged.'}
+                      aria-pressed={solo.includes(t.id)}
+                      onClick={() => toggleSolo(t.id)}
+                    >
+                      S
+                    </button>
                     <button
                       className={t.locked ? 'on' : ''}
                       title={t.locked ? 'Unlock track' : 'Lock track'}
@@ -872,7 +930,7 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
               {timeline.tracks.map((t) => (
                 <div
                   key={t.id}
-                  className={`track-lane ${t.kind} ${t.locked ? 'locked' : ''} ${dropHint?.trackId === t.id ? 'drop' : ''}`}
+                  className={`track-lane ${t.kind} ${t.locked ? 'locked' : ''} ${silenced(t) ? 'silenced' : ''} ${dropHint?.trackId === t.id ? 'drop' : ''}`}
                   style={{ height: ROW_H[t.kind], ...tint(t.id) }}
                 >
                   {timeline.clips
@@ -886,7 +944,7 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
                         fps={timeline.fps}
                         selected={selection.includes(c.id)}
                         thumb={c.assetId && assetById.get(c.assetId)?.hasThumb ? thumbUrl(projectId, c.assetId) : undefined}
-                        dimmed={Boolean(t.muted || t.hidden)}
+                        dimmed={Boolean(t.muted || t.hidden || (t.kind === 'audio' && silenced(t)))}
                         projectId={projectId}
                         onPointerDown={onClipPointerDown}
                         onContextMenu={openMenu}
@@ -1125,6 +1183,15 @@ const ClipView = memo(function ClipView({
         )}
         {vol !== 1 && !clip.muted && clip.kind !== 'image' && !generated && <span className="badge">{Math.round(vol * 100)}%</span>}
       </div>
+      {clip.kind === 'audio' && (
+        <div
+          className="volume-line"
+          style={{ top: `calc(${VOLUME_PAD}px + (100% - ${2 * VOLUME_PAD}px) * ${volumeToY(vol)})` }}
+          title={`${volumeLabel(vol)}: drag up or down (⇧ for fine steps), double-click for 100%`}
+          onPointerDown={(e) => onPointerDown(e, clip, 'volume')}
+          onDoubleClick={() => useEditor.getState().applyTimeline((t) => setVolume(t, clip.id, 1))}
+        />
+      )}
       <div className="handle start" onPointerDown={(e) => onPointerDown(e, clip, 'trim-start')} />
       <div className="handle end" onPointerDown={(e) => onPointerDown(e, clip, 'trim-end')} />
       {fadeable && (

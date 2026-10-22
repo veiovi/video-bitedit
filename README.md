@@ -90,15 +90,19 @@ below.
   left/right, ⌘B split, and P/N/` toggle the magnet, snapping and linkage.
 - J/K/L shuttle, frame stepping and markers. ↑/↓ jump between cuts and
   markers, a click on the timecode takes a typed time (12.5, 1:05, +2), and
-  ⌘-scroll or a pinch zooms around the pointer.
+  ⌘-scroll or a pinch zooms around the pointer. Loop playback (⇧L) repeats
+  the selected clips, or the whole timeline.
 - Copy, cut, paste at the playhead and duplicate (⌘C/X/V/D), ⌥-drag to drag a
   copy, nudge by a frame (, . or ⌥←/→), turn clips off without deleting them
   (⇧E), and a right-click menu for all of it. Drags show the new position or
   length and a line where the clip snapped.
 - Per-clip volume, fades, opacity, scale, position, rotation, and fit or fill
-  cropping for reframing vertical shorts. Per-track volume, mute, hide and
-  lock.
+  cropping for reframing vertical shorts. Per-track volume, mute, solo, hide
+  and lock. Solo is for listening: it changes what the preview plays, never
+  the export.
 - Fade knobs on each clip's top corners: drag them in to fade in or out.
+- A volume line on audio clips: drag it up or down (⇧ for fine steps),
+  double-click for 100%.
 - Thumbnails, filmstrips, and waveforms on audio clips and under video clips.
   Detach audio moves a video clip's sound to its own clip on an audio track,
   to trim, move and fade it separately.

@@ -73,6 +73,16 @@ The model lives in `src/shared/project.ts`.
     ↑/↓ jump to the previous or next clip edge or marker
     (`adjacentEditPoint`). The timecode takes a typed time (`parseTimecode`).
     ⇧E turns clips off and on (`toggleClipsEnabled`).
+  - **Listening.** Audio clips carry a volume line: dragging it sets the
+    clip's volume (`setVolume`, 0–200%) on a square-root scale that puts 100%
+    a third of the way down; ⇧ drags in fine steps, 100% is sticky, and a
+    double-click resets it. The S button solos a track. Solo lives in the tab
+    (`solo` in the store), and the preview plays `withSolo(timeline, solo)`,
+    which mutes every other track, so the saved timeline and the export never
+    see it. Loop playback (⇧L, `loop`) repeats the selected clips
+    (`loopRange`) or the whole timeline: the player loops the timeline, and
+    leaving the selection while playing seeks back to its start (its end when
+    playing backwards). The ruler shades the looped stretch.
   - **Gaps and files.** Clicking an empty stretch of the main track
     (when the magnet is off) selects it (`gapAt`), and Delete closes it.
     Overlay and audio tracks are free placement, so their gaps are never

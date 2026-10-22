@@ -410,6 +410,16 @@ export function fadeEnvelope(clip: Clip, frame: number): number {
   return Math.max(0, Math.min(1, k));
 }
 
+/**
+ * The timeline as heard while some tracks are soloed: every other track is
+ * muted (a video track keeps its picture). Solo is for listening in the
+ * editor; the saved timeline and the export never see it.
+ */
+export function withSolo(timeline: Timeline, solo: string[]): Timeline {
+  if (!timeline.tracks.some((t) => solo.includes(t.id))) return timeline;
+  return { ...timeline, tracks: timeline.tracks.map((t) => (solo.includes(t.id) ? t : { ...t, muted: true })) };
+}
+
 /** Visual clips go on video tracks; audio clips on audio tracks. */
 export function trackAccepts(track: Track, kind: ClipKind): boolean {
   return kind === 'audio' ? track.kind === 'audio' : track.kind === 'video';

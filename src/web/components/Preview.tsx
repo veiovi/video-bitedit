@@ -1,10 +1,10 @@
 import { Player, type PlayerRef } from '@remotion/player';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { formatTimecode, timelineDuration } from '../../shared/project';
+import { formatTimecode, timelineDuration, withSolo } from '../../shared/project';
 import { TimelineComposition } from '../../remotion/Timeline';
 import { mediaUrl } from '../api';
 import { Icon } from './Icon';
-import { activeTimeline, useEditor } from '../store';
+import { activeTimeline, loopRange, toggleLoop, useEditor } from '../store';
 
 export function Preview() {
   const doc = useEditor((s) => s.doc);
@@ -13,6 +13,8 @@ export function Preview() {
   const projectId = useEditor((s) => s.projectId);
   const playing = useEditor((s) => s.playing);
   const playbackRate = useEditor((s) => s.playbackRate);
+  const solo = useEditor((s) => s.solo);
+  const loop = useEditor((s) => s.loop);
   const timeline = activeTimeline({ doc, timelineId });
   const ref = useRef<PlayerRef>(null);
 
@@ -20,7 +22,9 @@ export function Preview() {
     () => Object.fromEntries(assets.filter((a) => a.status === 'ready').map((a) => [a.id, mediaUrl(projectId, a.id)])),
     [assets, projectId],
   );
-  const inputProps = useMemo(() => ({ timeline, theme: doc.theme, sources }), [timeline, doc.theme, sources]);
+  // The preview hears only the soloed tracks; the saved timeline is untouched.
+  const heard = useMemo(() => withSolo(timeline, solo), [timeline, solo]);
+  const inputProps = useMemo(() => ({ timeline: heard, theme: doc.theme, sources }), [heard, doc.theme, sources]);
   const duration = Math.max(1, timelineDuration(timeline));
 
   const attach = useCallback((player: PlayerRef | null) => {
@@ -31,7 +35,18 @@ export function Preview() {
   useEffect(() => {
     const player = ref.current;
     if (!player) return;
-    const onFrame = (e: { detail: { frame: number } }) => useEditor.setState({ playhead: e.detail.frame });
+    const onFrame = (e: { detail: { frame: number } }) => {
+      const frame = e.detail.frame;
+      const s = useEditor.getState();
+      // Looping the selection: leaving it while playing jumps back to its start (or its end, playing backwards).
+      // The whole timeline loops through the player's own `loop`.
+      const range = s.loop && s.playing ? loopRange(s) : null;
+      if (range && (frame < range.start || frame >= range.end)) {
+        player.seekTo(s.playbackRate < 0 ? range.end - 1 : range.start);
+        return;
+      }
+      useEditor.setState({ playhead: frame });
+    };
     const onPlay = () => useEditor.setState({ playing: true });
     const onPause = () => useEditor.setState({ playing: false });
     player.addEventListener('frameupdate', onFrame);
@@ -66,6 +81,7 @@ export function Preview() {
           acknowledgeRemotionLicense
           numberOfSharedAudioTags={8}
           playbackRate={playbackRate}
+          loop={loop}
         />
       </div>
       <div className="transport">
@@ -88,6 +104,14 @@ export function Preview() {
           </button>
           <button title="End (End)" onClick={() => seek(duration - 1)}>
             <Icon name="skip-fwd" />
+          </button>
+          <button
+            className={`loop ${loop ? 'on' : ''}`}
+            title={`Loop playback (⇧L): repeats the selected clips, or the whole timeline. ${loop ? 'On' : 'Off'}`}
+            aria-pressed={loop}
+            onClick={toggleLoop}
+          >
+            <Icon name="repeat" />
           </button>
         </div>
         <label className="volume" title="Preview volume">
