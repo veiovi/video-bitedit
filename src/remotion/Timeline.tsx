@@ -25,6 +25,7 @@ import {
 import { captionLines } from '../shared/captionLooks';
 import { CaptionLineView } from './CaptionLine';
 import { type Clip, type Timeline, type Transition, clipSpeed, fadeEnvelope, framing } from '../shared/project';
+import { clipAt, shiftKeyframes, valueAt } from '../shared/keyframes';
 import { applyEffects, enterTransition, exitTransition } from './effects';
 import { SlideClip } from './Slide';
 import { TITLE_FONT_FACES, getTheme, textMotion } from '../shared/themes';
@@ -56,8 +57,8 @@ const TextClip: React.FC<{ clip: Clip; themeId?: string }> = ({ clip, themeId })
   const t = clip.text!;
   const theme = getTheme(themeId);
   const motion = textMotion(t.animation ?? theme.animation, frame / fps, t.text.length);
-  const opacity = (clip.opacity ?? 1) * fadeEnvelope(clip, frame) * motion.opacity;
-  const scale = (clip.scale ?? 1) * motion.scale;
+  const opacity = valueAt(clip, 'opacity', frame) * fadeEnvelope(clip, frame) * motion.opacity;
+  const scale = valueAt(clip, 'scale', frame) * motion.scale;
   const text = Number.isFinite(motion.chars) ? t.text.slice(0, motion.chars) : t.text;
   return (
     <AbsoluteFill style={{ opacity }}>
@@ -66,7 +67,7 @@ const TextClip: React.FC<{ clip: Clip; themeId?: string }> = ({ clip, themeId })
           position: 'absolute',
           left: `${t.x * 100}%`,
           top: `${t.y * 100}%`,
-          transform: `translate(-50%, ${-50 + motion.translateY * 100}%) scale(${scale}) rotate(${clip.rotation ?? 0}deg)`,
+          transform: `translate(-50%, ${-50 + motion.translateY * 100}%) scale(${scale}) rotate(${valueAt(clip, 'rotation', frame)}deg)`,
           fontSize: t.fontSize,
           fontWeight: t.fontWeight,
           color: t.color,
@@ -101,10 +102,19 @@ const CaptionClip: React.FC<{ clip: Clip; themeId?: string }> = ({ clip, themeId
   if (!line || !t) return null;
   const theme = getTheme(themeId);
   const accent = t.highlight ?? theme.presets.caption.highlight ?? '#ffd84d';
-  const opacity = (clip.opacity ?? 1) * fadeEnvelope(clip, frame) * Math.min(1, (frame - line.start + 1) / 3);
+  const opacity = valueAt(clip, 'opacity', frame) * fadeEnvelope(clip, frame) * Math.min(1, (frame - line.start + 1) / 3);
   return (
     <AbsoluteFill style={{ opacity }}>
-      <CaptionLineView line={line} frame={frame} fps={fps} style={t} fontFamily={theme.fontFamily} accent={accent} scale={clip.scale ?? 1} rotation={clip.rotation ?? 0} />
+      <CaptionLineView
+        line={line}
+        frame={frame}
+        fps={fps}
+        style={t}
+        fontFamily={theme.fontFamily}
+        accent={accent}
+        scale={valueAt(clip, 'scale', frame)}
+        rotation={valueAt(clip, 'rotation', frame)}
+      />
     </AbsoluteFill>
   );
 };
@@ -122,8 +132,10 @@ const VisualClip: React.FC<{ clip: Clip; src?: string; muted: boolean; gain: num
   const enter = exit ? null : enterTransition(clip.transition, frame);
   const leave = exit ? exitTransition(exit, frame) : null;
   const fx = applyEffects(clip, exit ? frame + clip.in! : frame, width);
-  const opacity = (clip.opacity ?? 1) * fadeEnvelope(clip, frame) * (enter?.opacity ?? 1);
-  const { transform, objectPosition } = framing(clip);
+  // Keyframed opacity and transform, as they stand at this frame.
+  const now = clipAt(clip, frame);
+  const opacity = (now.opacity ?? 1) * fadeEnvelope(clip, frame) * (enter?.opacity ?? 1);
+  const { transform, objectPosition } = framing(now);
   const mediaStyle: React.CSSProperties = { width: '100%', height: '100%', objectFit: clip.fit ?? 'contain', objectPosition };
   const outer = [enter?.transform, leave?.transform, transform].filter(Boolean).join(' ');
   const motionGain = enter?.gain ?? leave?.gain ?? 1;
@@ -145,7 +157,7 @@ const VisualClip: React.FC<{ clip: Clip; src?: string; muted: boolean; gain: num
             trimBefore={clip.in ?? 0}
             playbackRate={clipSpeed(clip)}
             muted={muted || Boolean(clip.muted)}
-            volume={(f) => gain * motionGain * (clip.volume ?? 1) * fadeEnvelope(clip, f)}
+            volume={(f) => gain * motionGain * valueAt(clip, 'volume', f) * fadeEnvelope(clip, f)}
             pauseWhenBuffering
             style={mediaStyle}
           />
@@ -187,6 +199,8 @@ function transitionTails(clips: Clip[]): { tail: Clip; exit: Transition }[] {
         fadeIn: 0,
         fadeOut: 0,
         transition: undefined,
+        // The tail continues after the clip's end, holding its last keyed values.
+        keyframes: shiftKeyframes(a.keyframes, -a.duration),
       },
       exit: { ...b.transition, duration },
     });
@@ -266,7 +280,7 @@ export const TimelineComposition: React.FC<TimelineProps> = ({ timeline, theme, 
                 src={sources[clip.assetId!]}
                 trimBefore={clip.in ?? 0}
                 playbackRate={clipSpeed(clip)}
-                volume={(f) => (track.volume ?? 1) * (clip.volume ?? 1) * fadeEnvelope(clip, f)}
+                volume={(f) => (track.volume ?? 1) * valueAt(clip, 'volume', f) * fadeEnvelope(clip, f)}
                 pauseWhenBuffering
               />
             </Sequence>

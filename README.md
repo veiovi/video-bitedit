@@ -114,6 +114,12 @@ below.
 - Fade knobs on each clip's top corners: drag them in to fade in or out.
 - A volume line on audio clips: drag it up or down (⇧ for fine steps),
   double-click for 100%.
+- Keyframes with easing for opacity, scale, position, rotation and volume:
+  ◆ in the inspector (or ;) keys the value at the playhead, sliders auto-key
+  once a property is animated, and each key picks linear, ease in, ease out,
+  ease in-out or hold. The selected clip shows its keys as diamonds to drag
+  or ⌥-click away. Trims, splits, speed changes and pasted looks keep the
+  animation on the footage.
 - Filmstrips along video clips (real frames for the part each clip plays),
   waveforms on audio clips and under video clips, and skimming: move the
   mouse across a video in the media bin to scrub through it.
@@ -135,6 +141,15 @@ below.
   cutaways, from the CLI, a cut list or the editor's Generate box.
 - Exports are loudness-normalised to −14 LUFS, the level social platforms
   expect.
+- Duck under speech: music dips by 6–24 dB wherever someone speaks on the
+  other tracks (found from transcripts or the waveform), as volume keyframes
+  you can adjust. Attack and release are adjustable, and Remove ducking takes
+  it out again.
+- Level meters on every audio track and a master meter, with a one-second
+  peak hold and red above 0 dBFS. They read the waveform at the playhead
+  with every volume, keyframe and fade applied, so they agree with the
+  export. Normalize brings a clip's peak to −1 dBFS, and the volume shows in
+  dB.
 
 **Explainers**
 - Remotion slides: title, bullets, split, image, stat and quote.

@@ -1,11 +1,15 @@
 import { Fragment, useEffect, useState } from 'react';
-import { canReplace, updateClip, updateTimeline } from '../../shared/edits';
+import { canReplace, clearKeyframes, setKeyframe, updateClip, updateTimeline } from '../../shared/edits';
+import { KEYFRAME_EASES, PROP_LABELS, adjacentKey, animatableProps, hasKeys, staticValue, valueAt } from '../../shared/keyframes';
+import { dbLabel } from '../../shared/levels';
 import { EFFECTS, GRADES, TRANSITIONS } from '../../shared/effects';
 import {
   type Clip,
   type Effect,
   type EffectType,
   type GradePreset,
+  type KeyframeEase,
+  type KeyframeProp,
   type ProjectDoc,
   SPEED_LIMITS,
   SPEED_PRESETS,
@@ -24,6 +28,9 @@ import { HelpTip } from './Help';
 import { CaptionLookPicker } from './CaptionLookPicker';
 import { WORDS_PER_LINE, wordsPerLine } from '../../shared/captionLooks';
 import { SHORTCUTS, type TipId } from '../help';
+import { clipFrame, noteKeyProp, playheadIn, toggleKeyframe } from '../keyframing';
+import { isDucked, normalizeClips } from '../audio';
+import { DuckingControls } from './Ducking';
 
 // Continuous controls (sliders, typing) preview every change and record one
 // undo step when the gesture ends.
@@ -51,9 +58,11 @@ function Slider(props: {
   format?: (v: number) => string;
   disabled?: boolean;
   onChange: (v: number) => void;
+  /** Controls after the readout (the keyframe buttons). */
+  extra?: React.ReactNode;
 }) {
   return (
-    <label className="field slider">
+    <label className={`field slider ${props.extra ? 'keyable' : ''}`}>
       <span>{props.label}</span>
       <input
         type="range"
@@ -68,9 +77,103 @@ function Slider(props: {
         onBlur={endGesture}
       />
       <output>{props.format ? props.format(props.value) : props.value}</output>
+      {props.extra}
     </label>
   );
 }
+
+/**
+ * A slider for a property that can be animated. With keys, it shows the
+ * value at the playhead and moving it sets a key there (auto-key); ◆ adds or
+ * removes the key at the playhead, ‹ and › jump between keys, and the ease
+ * menu shapes the span after the key under the playhead.
+ */
+function AnimSlider(props: {
+  clip: Clip;
+  prop: KeyframeProp;
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  format?: (v: number) => string;
+  disabled?: boolean;
+}) {
+  const { clip, prop } = props;
+  const keyed = hasKeys(clip, prop);
+  const inside = useEditor((s) => playheadIn(clip, s.playhead));
+  // Only animated properties follow the playhead, so static ones do not redraw while playing.
+  const rel = useEditor((s) => (keyed ? clipFrame(clip, s.playhead) : 0));
+  const keys = clip.keyframes?.[prop] ?? [];
+  const here = keyed && inside ? keys.find((k) => k.frame === rel) : undefined;
+  const value = keyed ? valueAt(clip, prop, rel) : staticValue(clip, prop);
+  const prev = keyed ? adjacentKey(clip, [prop], useEditor.getState().playhead - clip.start, -1) : null;
+  const next = keyed ? adjacentKey(clip, [prop], useEditor.getState().playhead - clip.start, 1) : null;
+  const seekKey = (f: number | null) => f !== null && useEditor.getState().seek(clip.start + f);
+  const onChange = (v: number) => {
+    noteKeyProp(prop);
+    if (keyed) {
+      const f = clipFrame(clip, useEditor.getState().playhead);
+      liveTimeline((t) => setKeyframe(t, clip.id, prop, f, v));
+    } else liveClip(clip.id, { [prop]: v });
+  };
+  const name = PROP_LABELS[prop].toLowerCase();
+  return (
+    <>
+      <Slider
+        {...props}
+        value={value}
+        onChange={onChange}
+        extra={
+          <span className="key-tools">
+            <button type="button" className="small ghost" disabled={prev === null} title={`Previous ${name} keyframe`} onClick={() => seekKey(prev)}>
+              ‹
+            </button>
+            <button
+              type="button"
+              className={`small ghost key-toggle ${here ? 'on' : keyed ? 'keyed' : ''}`}
+              disabled={props.disabled || !inside}
+              aria-pressed={Boolean(here)}
+              title={here ? `Remove the ${name} keyframe at the playhead` : `Add a ${name} keyframe at the playhead (;)`}
+              onClick={() => toggleKeyframe(clip.id, prop)}
+            >
+              ◆
+            </button>
+            <button type="button" className="small ghost" disabled={next === null} title={`Next ${name} keyframe`} onClick={() => seekKey(next)}>
+              ›
+            </button>
+          </span>
+        }
+      />
+      {here && (
+        <label className="field key-ease">
+          <span>Then</span>
+          <select
+            value={here.ease ?? 'linear'}
+            disabled={props.disabled}
+            title="How the value moves from this keyframe to the next"
+            onChange={(e) => useEditor.getState().applyTimeline((t) => setKeyframe(t, clip.id, prop, here.frame, here.value, e.target.value as KeyframeEase))}
+          >
+            {KEYFRAME_EASES.map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="small ghost"
+            disabled={props.disabled}
+            title={`Remove every ${name} keyframe, keeping the value at the playhead`}
+            onClick={() => useEditor.getState().applyTimeline((t) => clearKeyframes(t, clip.id, prop, rel))}
+          >
+            Clear
+          </button>
+        </label>
+      )}
+    </>
+  );
+}
+
 
 function SecondsField({ label, frames, fps, disabled, onChange }: { label: string; frames: number; fps: number; disabled?: boolean; onChange: (f: number) => void }) {
   return (
@@ -422,6 +525,7 @@ function ClipInspector({ clip, timeline }: { clip: Clip; timeline: Timeline }) {
   const visual = clip.kind !== 'audio';
   const generated = clip.kind === 'text' || clip.kind === 'caption';
   const pct = (v: number) => `${Math.round(v * 100)}%`;
+  const animatable = animatableProps(clip);
   return (
     <div className="inspector">
       <div className="inspector-title">
@@ -443,16 +547,38 @@ function ClipInspector({ clip, timeline }: { clip: Clip; timeline: Timeline }) {
       )}
       {visual && (
         <Section title="Transform" help="transform">
-          <Slider label="Scale" value={clip.scale ?? 1} min={0.1} max={4} step={0.01} disabled={disabled} format={pct} onChange={(v) => liveClip(clip.id, { scale: v })} />
+          {/* Properties the clip can animate get keyframe buttons (◆); slides draw without them. */}
+          {animatable.includes('scale') ? (
+            <AnimSlider clip={clip} prop="scale" label="Scale" min={0.1} max={4} step={0.01} disabled={disabled} format={pct} />
+          ) : (
+            <Slider label="Scale" value={clip.scale ?? 1} min={0.1} max={4} step={0.01} disabled={disabled} format={pct} onChange={(v) => liveClip(clip.id, { scale: v })} />
+          )}
           {!generated && (
             <>
               {/* Cropped clips pan inside their crop (-50%..50%); letterboxed ones move across the frame. */}
-              <Slider label="Position X" value={clip.offsetX ?? 0} min={clip.fit === 'cover' ? -0.5 : -1} max={clip.fit === 'cover' ? 0.5 : 1} step={0.01} disabled={disabled} format={pct} onChange={(v) => liveClip(clip.id, { offsetX: v })} />
-              <Slider label="Position Y" value={clip.offsetY ?? 0} min={clip.fit === 'cover' ? -0.5 : -1} max={clip.fit === 'cover' ? 0.5 : 1} step={0.01} disabled={disabled} format={pct} onChange={(v) => liveClip(clip.id, { offsetY: v })} />
+              {animatable.includes('offsetX') ? (
+                <>
+                  <AnimSlider clip={clip} prop="offsetX" label="Position X" min={clip.fit === 'cover' ? -0.5 : -1} max={clip.fit === 'cover' ? 0.5 : 1} step={0.01} disabled={disabled} format={pct} />
+                  <AnimSlider clip={clip} prop="offsetY" label="Position Y" min={clip.fit === 'cover' ? -0.5 : -1} max={clip.fit === 'cover' ? 0.5 : 1} step={0.01} disabled={disabled} format={pct} />
+                </>
+              ) : (
+                <>
+                  <Slider label="Position X" value={clip.offsetX ?? 0} min={clip.fit === 'cover' ? -0.5 : -1} max={clip.fit === 'cover' ? 0.5 : 1} step={0.01} disabled={disabled} format={pct} onChange={(v) => liveClip(clip.id, { offsetX: v })} />
+                  <Slider label="Position Y" value={clip.offsetY ?? 0} min={clip.fit === 'cover' ? -0.5 : -1} max={clip.fit === 'cover' ? 0.5 : 1} step={0.01} disabled={disabled} format={pct} onChange={(v) => liveClip(clip.id, { offsetY: v })} />
+                </>
+              )}
             </>
           )}
-          <Slider label="Rotation" value={clip.rotation ?? 0} min={-180} max={180} step={1} disabled={disabled} format={(v) => `${v}°`} onChange={(v) => liveClip(clip.id, { rotation: v })} />
-          <Slider label="Opacity" value={clip.opacity ?? 1} min={0} max={1} step={0.01} disabled={disabled} format={pct} onChange={(v) => liveClip(clip.id, { opacity: v })} />
+          {animatable.includes('rotation') ? (
+            <AnimSlider clip={clip} prop="rotation" label="Rotation" min={-180} max={180} step={1} disabled={disabled} format={(v) => `${Math.round(v)}°`} />
+          ) : (
+            <Slider label="Rotation" value={clip.rotation ?? 0} min={-180} max={180} step={1} disabled={disabled} format={(v) => `${v}°`} onChange={(v) => liveClip(clip.id, { rotation: v })} />
+          )}
+          {animatable.includes('opacity') ? (
+            <AnimSlider clip={clip} prop="opacity" label="Opacity" min={0} max={1} step={0.01} disabled={disabled} format={pct} />
+          ) : (
+            <Slider label="Opacity" value={clip.opacity ?? 1} min={0} max={1} step={0.01} disabled={disabled} format={pct} onChange={(v) => liveClip(clip.id, { opacity: v })} />
+          )}
           {!generated && (
             <label className="field">
               <span>Fit</span>
@@ -539,7 +665,17 @@ function ClipInspector({ clip, timeline }: { clip: Clip; timeline: Timeline }) {
             </>
           ) : (
             <>
-              <Slider label="Volume" value={clip.volume ?? 1} min={0} max={2} step={0.01} disabled={disabled} format={pct} onChange={(v) => liveClip(clip.id, { volume: v })} />
+              <AnimSlider clip={clip} prop="volume" label="Volume" min={0} max={2} step={0.01} disabled={disabled} format={(v) => `${pct(v)} ${dbLabel(v)}`} />
+              <div className="button-row">
+                <button
+                  className="small"
+                  disabled={disabled}
+                  title="Set the clip's gain so its loudest moment reaches −1 dBFS (up to 200%)"
+                  onClick={() => void normalizeClips([clip.id])}
+                >
+                  Normalize
+                </button>
+              </div>
               {clip.kind === 'video' && clip.assetId && (
                 <button
                   className="small"
@@ -555,6 +691,12 @@ function ClipInspector({ clip, timeline }: { clip: Clip; timeline: Timeline }) {
               )}
             </>
           )}
+        </Section>
+      )}
+      {clip.kind === 'audio' && (
+        <Section title="Ducking" open={isDucked([clip], clip.trackId)} help="ducking">
+          <p className="hint">Lowers this track wherever someone speaks on the other tracks, as volume keyframes you can adjust.</p>
+          <DuckingControls trackId={clip.trackId} disabled={disabled} />
         </Section>
       )}
     </div>

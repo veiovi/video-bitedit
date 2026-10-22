@@ -38,6 +38,9 @@ export const COMMANDS = [
   { id: 'toggle-enabled', title: 'Turn selected clips off / on', group: 'Edit', keys: '⇧E', aliases: 'disable enable' },
   { id: 'detach-audio', title: 'Detach audio from selected video', group: 'Edit', aliases: 'separate sound' },
   { id: 'add-marker', title: 'Add marker at playhead', group: 'Edit', keys: 'M' },
+  { id: 'keyframe', title: 'Add / remove keyframe at playhead', group: 'Edit', keys: ';', aliases: 'animate key diamond' },
+  { id: 'normalize', title: 'Normalize selected clips to −1 dBFS', group: 'Edit', aliases: 'gain loudness level peak' },
+  { id: 'duck', title: 'Duck the selected audio clip\'s track under speech', group: 'Edit', aliases: 'music voice lower volume ducking' },
 
   { id: 'magnet', title: 'Magnet (gapless main track) on / off', group: 'Timeline', keys: 'P', aliases: 'ripple' },
   { id: 'snapping', title: 'Snapping on / off', group: 'Timeline', keys: 'N', aliases: 'snap' },

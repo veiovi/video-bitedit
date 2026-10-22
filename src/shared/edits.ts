@@ -5,10 +5,27 @@
 // range out of whatever was already there.
 
 import { retimeWords } from './captions';
+import { type DuckingOptions, type SpeechRange, duckingKeys } from './ducking';
+import {
+  PROP_LIMITS,
+  animatableProps,
+  cropKeys,
+  hasKeys,
+  keyframesFor,
+  normalizeKeys,
+  retimeKeyframes,
+  scaleKeyframes,
+  tidyKeyframes,
+  valueAt,
+} from './keyframes';
 import {
   type Clip,
   type Effect,
   FORMATS,
+  type Keyframe,
+  type KeyframeEase,
+  type KeyframeProp,
+  type Keyframes,
   type FormatId,
   MARKER_COLORS,
   type Marker,
@@ -34,15 +51,17 @@ const unlimited: SourceLength = () => Infinity;
 /**
  * A clip whose content now begins `delta` timeline frames later (head trimmed)
  * and lasts `duration` frames. Moves the source `in` point by `delta × speed`
- * source frames and retimes caption words.
+ * source frames and retimes caption words and keyframes.
  */
 function reframe(c: Clip, delta: number, duration: number): Clip {
-  return {
+  const out: Clip = {
     ...c,
     duration,
     in: c.in === undefined ? undefined : Math.max(0, c.in + Math.round(delta * clipSpeed(c))),
     words: retimeWords(c.words, delta, duration),
   };
+  if (c.keyframes) out.keyframes = retimeKeyframes(c.keyframes, delta, duration);
+  return out;
 }
 
 /** Timeline frames a clip can last from its `in` point before its source runs out. */
@@ -256,8 +275,15 @@ export function detachAudio(doc: Timeline, ids: string[]): Timeline {
       ...(clip.volume !== undefined && { volume: clip.volume }),
       ...(clip.fadeIn && { fadeIn: clip.fadeIn }),
       ...(clip.fadeOut && { fadeOut: clip.fadeOut }),
+      // Volume keys follow the sound; the picture keeps its own animation.
+      ...(clip.keyframes?.volume?.length && { keyframes: { volume: clip.keyframes.volume.map((k) => ({ ...k })) } }),
     };
-    out = { ...out, clips: sortClips([...out.clips.map((c) => (c.id === id ? { ...c, muted: true } : c)), sound]) };
+    const muted = (c: Clip): Clip => {
+      if (!c.keyframes?.volume) return { ...c, muted: true };
+      const { volume: _moved, ...rest } = c.keyframes;
+      return { ...c, muted: true, keyframes: tidyKeyframes(rest) };
+    };
+    out = { ...out, clips: sortClips([...out.clips.map((c) => (c.id === id ? muted(c) : c)), sound]) };
   }
   return out;
 }
@@ -665,8 +691,11 @@ export function setSpeed(
   const s = Math.round(Math.min(SPEED_LIMITS.max, Math.max(SPEED_LIMITS.min, speed)) * 100) / 100;
   const old = clipSpeed(clip);
   if (s === old) return doc;
+  // Keys stretch with the clip, so the animation spans the same footage.
+  const stretched = Math.max(1, Math.round((clip.duration * old) / s));
   const retimed: Clip = { ...clip, speed: s === 1 ? undefined : s };
-  const duration = Math.max(1, Math.min(Math.round((clip.duration * old) / s), maxLength(retimed, sourceLength)));
+  const duration = Math.max(1, Math.min(stretched, maxLength(retimed, sourceLength)));
+  if (clip.keyframes) retimed.keyframes = scaleKeyframes(clip.keyframes, old / s, duration);
   const base = { ...doc, clips: doc.clips.map((c) => (c.id === id ? retimed : c)) };
   const end = clip.start + duration;
   const out = ripple ? rippleTrim(base, id, 'end', end, sourceLength, ripple.onlyTrack) : trimClip(base, id, 'end', end, sourceLength);
@@ -680,7 +709,8 @@ export function setSpeed(
 /**
  * Hold one frame of a video clip: the source frame showing at timeline
  * `frame` becomes a still (a silent `freeze` clip) `length` frames long that
- * starts there, keeping the clip's framing and effects. With `insert`, the
+ * starts there, keeping the clip's framing and effects (animated ones as they
+ * stand at that frame: the still holds them). With `insert`, the
  * clip is split there and everything after it moves right (on
  * `insert.onlyTrack` alone, or every unlocked track); otherwise the still
  * overwrites what follows on the track.
@@ -690,6 +720,8 @@ export function freezeFrame(doc: Timeline, id: string, frame: number, length: nu
   const f = Math.round(frame);
   if (!clip || clip.kind !== 'video' || !clip.assetId || findTrack(doc, clip.trackId)?.locked) return doc;
   if (f < clip.start || f >= clipEnd(clip)) return doc;
+  const look = (prop: 'opacity' | 'scale' | 'rotation' | 'offsetX' | 'offsetY') =>
+    hasKeys(clip, prop) ? { [prop]: valueAt(clip, prop, f - clip.start) } : clip[prop] !== undefined ? { [prop]: clip[prop] } : {};
   const still: Clip = {
     id: newId(),
     kind: 'video',
@@ -701,11 +733,11 @@ export function freezeFrame(doc: Timeline, id: string, frame: number, length: nu
     freeze: true,
     muted: true,
     ...(clip.fit && { fit: clip.fit }),
-    ...(clip.scale !== undefined && { scale: clip.scale }),
-    ...(clip.rotation !== undefined && { rotation: clip.rotation }),
-    ...(clip.offsetX !== undefined && { offsetX: clip.offsetX }),
-    ...(clip.offsetY !== undefined && { offsetY: clip.offsetY }),
-    ...(clip.opacity !== undefined && { opacity: clip.opacity }),
+    ...look('scale'),
+    ...look('rotation'),
+    ...look('offsetX'),
+    ...look('offsetY'),
+    ...look('opacity'),
     ...(clip.effects?.length && { effects: clip.effects }),
   };
   return insert ? insertClip(doc, still, insert.onlyTrack) : addClip(doc, still);
@@ -750,7 +782,7 @@ export function slipClip(doc: Timeline, id: string, delta: number, sourceLength:
 
 // ---- Copying a clip's look ----
 
-/** A clip's look, as Copy attributes takes it: effects, transition, opacity, transform, speed and volume. */
+/** A clip's look, as Copy attributes takes it: effects, transition, opacity, transform, speed, volume and their keyframes. */
 export interface ClipAttributes {
   effects?: Effect[];
   transition?: Clip['transition'];
@@ -762,6 +794,8 @@ export interface ClipAttributes {
   fit?: 'contain' | 'cover';
   speed?: number;
   volume?: number;
+  /** Animation of the properties above, in frames from the clip's start. */
+  keyframes?: Keyframes;
 }
 
 /** What Copy attributes takes from a clip. Settings the clip's kind has are copied with their defaults filled in. */
@@ -772,6 +806,8 @@ export function clipAttributes(c: Clip): ClipAttributes {
   if (c.kind !== 'audio') Object.assign(a, { opacity: c.opacity ?? 1, scale: c.scale ?? 1, rotation: c.rotation ?? 0 });
   if (c.kind === 'video' || c.kind === 'image') Object.assign(a, { offsetX: c.offsetX ?? 0, offsetY: c.offsetY ?? 0, fit: c.fit ?? 'contain' });
   if ((c.kind === 'video' || c.kind === 'audio') && !c.freeze) Object.assign(a, { speed: c.speed ?? 1, volume: c.volume ?? 1 });
+  const keys = keyframesFor(c, c.keyframes);
+  if (keys) a.keyframes = keys;
   return a;
 }
 
@@ -780,6 +816,8 @@ export function clipAttributes(c: Clip): ClipAttributes {
  * kind. A pasted effect replaces an effect of the same type instead of
  * stacking a second one; other effects stay. Speed changes length as
  * `setSpeed` does, rippling main-track clips when `rippleMain` is given.
+ * Keyframes are part of the look: each pasted property takes the copied
+ * keys (cut to the clip's length), or loses its own when the copy had none.
  * Clips on locked tracks are left alone.
  */
 export function pasteAttributes(
@@ -820,8 +858,133 @@ export function pasteAttributes(
     if (media && !c.freeze && attrs.volume !== undefined) patch.volume = attrs.volume;
     t = updateClip(t, id, patch);
     if (media && attrs.speed !== undefined) t = setSpeed(t, id, attrs.speed, sourceLength, rippleMain && c.trackId === main ? rippleMain : undefined);
+    // Keys go on after the speed change, so they keep the timing they were copied with.
+    const now = t.clips.find((x) => x.id === id)!;
+    const pasted = (Object.keys(patch) as (keyof Clip)[]).filter((k): k is KeyframeProp => (animatableProps(now) as string[]).includes(k));
+    if (pasted.length) {
+      const kf: Keyframes = { ...now.keyframes };
+      for (const prop of pasted) {
+        const keys = attrs.keyframes?.[prop];
+        if (keys?.length) kf[prop] = cropKeys(keys, now.duration);
+        else delete kf[prop];
+      }
+      t = updateClip(t, id, { keyframes: tidyKeyframes(kf) });
+    }
   }
   return t;
+}
+
+// ---- Keyframes ----
+// Keys sit in frames from the clip's start (0 to duration − 1) and are kept
+// sorted, one per frame. Values are kept in each property's range.
+
+function withKeys(doc: Timeline, id: string, prop: KeyframeProp, fn: (keys: Keyframe[], clip: Clip) => Keyframe[]): Timeline {
+  const clip = doc.clips.find((c) => c.id === id);
+  if (!clip || findTrack(doc, clip.trackId)?.locked || !animatableProps(clip).includes(prop)) return doc;
+  const before = clip.keyframes?.[prop] ?? [];
+  const after = normalizeKeys(fn(before, clip));
+  if (after.length === before.length && after.every((k, i) => sameKey(k, before[i]))) return doc;
+  const kf: Keyframes = { ...clip.keyframes, [prop]: after };
+  return updateClip(doc, id, { keyframes: tidyKeyframes(kf) });
+}
+
+const sameKey = (a: Keyframe, b: Keyframe) => a.frame === b.frame && a.value === b.value && (a.ease ?? 'linear') === (b.ease ?? 'linear') && a.duck === b.duck;
+
+const clampValue = (prop: KeyframeProp, v: number) => Math.min(PROP_LIMITS[prop].max, Math.max(PROP_LIMITS[prop].min, v));
+
+/**
+ * Add a key, or replace the one at that frame. The frame is kept inside the
+ * clip and the value in the property's range. Without `ease`, a replaced key
+ * keeps its ease. A key set by hand is no longer a ducking key.
+ */
+export function setKeyframe(doc: Timeline, id: string, prop: KeyframeProp, frame: number, value: number, ease?: KeyframeEase): Timeline {
+  if (!Number.isFinite(frame) || !Number.isFinite(value)) return doc;
+  return withKeys(doc, id, prop, (keys, clip) => {
+    const f = Math.min(Math.max(0, Math.round(frame)), clip.duration - 1);
+    const old = keys.find((k) => k.frame === f);
+    const e = ease ?? old?.ease;
+    const key: Keyframe = { frame: f, value: clampValue(prop, value), ...(e && e !== 'linear' && { ease: e }) };
+    return [...keys.filter((k) => k.frame !== f), key];
+  });
+}
+
+/** Remove the key at `frame`, if there is one. */
+export function removeKeyframe(doc: Timeline, id: string, prop: KeyframeProp, frame: number): Timeline {
+  return withKeys(doc, id, prop, (keys) => keys.filter((k) => k.frame !== Math.round(frame)));
+}
+
+/** Move the key at `from` to `to` (kept inside the clip); a key already at `to` is replaced. */
+export function moveKeyframe(doc: Timeline, id: string, prop: KeyframeProp, from: number, to: number): Timeline {
+  return withKeys(doc, id, prop, (keys, clip) => {
+    const key = keys.find((k) => k.frame === Math.round(from));
+    if (!key) return keys;
+    const f = Math.min(Math.max(0, Math.round(to)), clip.duration - 1);
+    return [...keys.filter((k) => k !== key && k.frame !== f), { ...key, frame: f }];
+  });
+}
+
+/**
+ * Remove a property's keys (every property's without `prop`). The property
+ * keeps the value it had at `frame` (relative to the clip) as its static value,
+ * so clearing does not make the clip jump.
+ */
+export function clearKeyframes(doc: Timeline, id: string, prop?: KeyframeProp, frame = 0): Timeline {
+  const clip = doc.clips.find((c) => c.id === id);
+  if (!clip?.keyframes || findTrack(doc, clip.trackId)?.locked) return doc;
+  const props = prop ? [prop] : (Object.keys(clip.keyframes) as KeyframeProp[]);
+  const patch: Partial<Clip> = {};
+  const kf: Keyframes = { ...clip.keyframes };
+  for (const p of props) {
+    if (!kf[p]?.length) continue;
+    patch[p] = valueAt(clip, p, frame);
+    delete kf[p];
+  }
+  if (Object.keys(patch).length === 0) return doc;
+  return updateClip(doc, id, { ...patch, keyframes: tidyKeyframes(kf) });
+}
+
+// ---- Ducking and gain ----
+
+/**
+ * Duck clips under speech: write volume keys (tagged as ducking keys) that dip
+ * by `opts.depth` dB around each speech range. The keys replace each clip's
+ * volume keys and stay editable. Clips the speech never reaches keep theirs.
+ */
+export function duckClips(doc: Timeline, ids: string[], speech: SpeechRange[], opts: Partial<DuckingOptions> = {}): Timeline {
+  const music = doc.clips.filter((c) => ids.includes(c.id) && !findTrack(doc, c.trackId)?.locked && animatableProps(c).includes('volume'));
+  const keys = duckingKeys(music, speech, opts);
+  let t = doc;
+  for (const c of music) {
+    const k = keys[c.id];
+    if (k?.length) t = updateClip(t, c.id, { keyframes: tidyKeyframes({ ...c.keyframes, volume: k }) });
+  }
+  return t;
+}
+
+/** Take out the volume keys Duck under speech wrote; keys set by hand stay. */
+export function removeDucking(doc: Timeline, ids: string[]): Timeline {
+  let t = doc;
+  for (const id of ids) t = withKeys(t, id, 'volume', (keys) => keys.filter((k) => !k.duck));
+  return t;
+}
+
+/**
+ * Set a clip's gain, kept between silent and MAX_VOLUME. Volume keys scale by
+ * the same factor (each kept in range), so a ducked or animated clip keeps its
+ * shape around the new level.
+ */
+export function setClipGain(doc: Timeline, id: string, gain: number): Timeline {
+  const clip = doc.clips.find((c) => c.id === id);
+  if (!clip || !Number.isFinite(gain) || findTrack(doc, clip.trackId)?.locked) return doc;
+  const value = Math.round(Math.max(0, Math.min(MAX_VOLUME, gain)) * 1000) / 1000;
+  const old = clip.volume ?? 1;
+  const keys = clip.keyframes?.volume;
+  const factor = old > 0 ? value / old : 1;
+  const patch: Partial<Clip> = { volume: value };
+  if (keys?.length && factor !== 1) {
+    patch.keyframes = { ...clip.keyframes, volume: keys.map((k) => ({ ...k, value: Math.round(clampValue('volume', k.value * factor) * 1000) / 1000 })) };
+  }
+  return updateClip(doc, id, patch);
 }
 
 // ---- Tracks ----

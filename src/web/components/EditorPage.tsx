@@ -30,6 +30,7 @@ import {
   useEditor,
   zoomToFit,
 } from '../store';
+import { toggleKeyAtPlayhead } from '../keyframing';
 import { startSync } from '../sync';
 import { CommentsPanel } from './Comments';
 import { WorkspaceCard, useWorkspace } from './KeyBox';
@@ -421,6 +422,10 @@ function useKeyboard() {
           if (side === 'left' && onMain.length && s.ripple) s.seek(Math.min(...picked.map((c) => c.start)));
           break;
         }
+        case ';':
+          // Add or remove a keyframe at the playhead on the selected clip.
+          toggleKeyAtPlayhead();
+          break;
         case '[':
           useEditor.setState({ tool: s.tool === 'backward' ? 'select' : 'backward' });
           break;

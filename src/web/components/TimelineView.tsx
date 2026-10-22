@@ -54,7 +54,9 @@ import {
   trackColor,
 } from '../../shared/project';
 import { defaultTextStyle, type TextPreset } from '../../shared/themes';
-import { peaksUrl, thumbUrl } from '../api';
+import { thumbUrl } from '../api';
+import { loadPeaks } from '../peaks';
+import { PEAKS_PER_SECOND } from '../../shared/levels';
 import { ClipFrames } from './Filmstrip';
 import { TranscriptRangeMark } from './TranscriptPanel';
 import { Icon } from './Icon';
@@ -86,6 +88,10 @@ import {
 import { kindOf, uploadFile } from '../upload';
 import { HelpTip } from './Help';
 import { CommentPins, InOutRange, InOutShade, MarkerLayer, RulerCorner } from './RulerMarks';
+import { hasKeys, valueAt } from '../../shared/keyframes';
+import { KeyDiamonds, VolumeCurve } from './KeyframeMarks';
+import { LevelMeter } from './Meter';
+import { DuckMenu } from './Ducking';
 
 export const ASSET_MIME = 'application/x-videdit-asset';
 export const TEXT_MIME = 'application/x-videdit-text';
@@ -299,6 +305,8 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
   const [swatches, setSwatches] = useState<{ trackId: string; x: number; y: number } | null>(null);
   const headerDrag = useRef<{ id: string; y: number; pointerId: number; moved: boolean } | null>(null);
   const [trackDrop, setTrackDrop] = useState<{ id: string; index: number; y: number } | null>(null);
+  /** The ducking popover, opened by right-clicking an audio track header. */
+  const [duckMenu, setDuckMenu] = useState<{ trackId: string; x: number; y: number } | null>(null);
   const headersRef = useRef<HTMLDivElement>(null);
   const mainId = mainTrackId(timeline);
   const HEADER_W = useHeaderWidth();
@@ -1035,6 +1043,11 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
                   onPointerMove={onHeaderPointerMove}
                   onPointerUp={onHeaderPointerUp}
                   onPointerCancel={onHeaderPointerUp}
+                  onContextMenu={(e) => {
+                    if (t.kind !== 'audio') return;
+                    e.preventDefault();
+                    setDuckMenu({ trackId: t.id, x: e.clientX, y: e.clientY });
+                  }}
                 >
                   <button
                     className="track-color"
@@ -1153,6 +1166,7 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
                       volumeBase.current = null;
                     }}
                   />
+                  {t.kind === 'audio' && <LevelMeter source={t.id} />}
                 </div>
               ))}
               {trackDrop && <div className="track-drop-line" style={{ top: trackDrop.y }} />}
@@ -1243,6 +1257,7 @@ export function TimelineView({ comments }: { comments: { frame: number; id: stri
         </div>
       </div>
       {menu && <ClipMenu menu={menu} onClose={() => setMenu(null)} />}
+      {duckMenu && <DuckMenu {...duckMenu} onClose={() => setDuckMenu(null)} />}
       {swatches && (
         <div className="swatch-menu" role="menu" style={{ left: Math.min(swatches.x, window.innerWidth - 180), top: Math.min(swatches.y, window.innerHeight - 90) }}>
           {SWATCHES.map((c) => (
@@ -1367,22 +1382,6 @@ function ClipMenu({ menu, onClose }: { menu: MenuState; onClose: () => void }) {
   );
 }
 
-const peaksCache = new Map<string, Promise<number[] | null>>();
-
-function loadPeaks(projectId: string, assetId: string): Promise<number[] | null> {
-  const key = `${projectId}/${assetId}`;
-  let p = peaksCache.get(key);
-  if (!p) {
-    p = fetch(peaksUrl(projectId, assetId))
-      .then((r) => (r.ok ? (r.json() as Promise<number[]>) : null))
-      .catch(() => null);
-    peaksCache.set(key, p);
-  }
-  return p;
-}
-
-const PEAKS_PER_SECOND = 50;
-
 /** Waveform peaks for a clip's media; null while loading or when it has none, [] when a video has no sound. */
 function usePeaks(projectId: string, assetId: string | undefined, enabled: boolean): number[] | null {
   const [peaks, setPeaks] = useState<number[] | null>(null);
@@ -1404,7 +1403,8 @@ function Waveform({ peaks, clip, fps, width }: { peaks: number[]; clip: Clip; fp
     const b = Math.max(a + 1, Math.floor(from + ((i + 1) / bars) * span));
     let max = 0;
     for (let j = a; j < b && j < peaks.length; j++) max = Math.max(max, peaks[j]);
-    const gain = Math.min(1, (clip.volume ?? 1) * fadeEnvelope(clip, ((i + 0.5) / bars) * clip.duration));
+    const at = ((i + 0.5) / bars) * clip.duration;
+    const gain = Math.min(1, valueAt(clip, 'volume', at) * fadeEnvelope(clip, at));
     const h = Math.max(0.5, (max / 255) * 48 * gain);
     d += `M${(i / bars) * 1000} ${50 - h}V${50 + h}`;
   }
@@ -1489,7 +1489,8 @@ const ClipView = memo(function ClipView({
         )}
         {vol !== 1 && !clip.muted && clip.kind !== 'image' && !generated && <span className="badge">{Math.round(vol * 100)}%</span>}
       </div>
-      {clip.kind === 'audio' && (
+      {clip.kind === 'audio' && hasKeys(clip, 'volume') && <VolumeCurve clip={clip} />}
+      {clip.kind === 'audio' && !hasKeys(clip, 'volume') && (
         <div
           className="volume-line"
           style={{ top: `calc(${VOLUME_PAD}px + (100% - ${2 * VOLUME_PAD}px) * ${volumeToY(vol)})` }}
@@ -1498,6 +1499,7 @@ const ClipView = memo(function ClipView({
           onDoubleClick={() => useEditor.getState().applyTimeline((t) => setVolume(t, clip.id, 1))}
         />
       )}
+      {selected && clip.keyframes && <KeyDiamonds clip={clip} px={px} />}
       <div className="handle start" onPointerDown={(e) => onPointerDown(e, clip, 'trim-start')} />
       <div className="handle end" onPointerDown={(e) => onPointerDown(e, clip, 'trim-end')} />
       {fadeable && (

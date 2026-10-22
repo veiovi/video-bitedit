@@ -72,7 +72,9 @@ export const SECTIONS: HelpSection[] = [
       ['Nudge', ', and . (or ⌥← ⌥→) move the selected clips a frame; add ⇧ for a second.'],
       ['Turn off', '⇧E turns clips off without deleting them; they are skipped in the preview and the export.'],
       ['Fades', 'Drag the small knobs at a clip\'s top corners to fade it in or out.'],
-      ['Volume line', 'Drag the line across an audio clip up or down to set its volume (⇧ for fine steps). 100% sits a third of the way down and is sticky; double-click the line to go back to 100%.'],
+      ['Volume line', 'Drag the line across an audio clip up or down to set its volume (⇧ for fine steps). 100% sits a third of the way down and is sticky; double-click the line to go back to 100%. A clip with volume keyframes draws its curve through them instead.'],
+      ['Keyframes on the timeline', 'The selected clip shows its keyframes as small diamonds along its bottom edge. Drag one to move it in time (it stays inside the clip); ⌥-click it to delete it; click it to put the playhead on it.'],
+      ['Meters', 'Each audio track header has a level meter, and the preview has a master meter. They read the waveform at the playhead with every volume, keyframe and fade applied, so they match the preview and the export. A line holds the peak for a second; red means over 0 dBFS. Stopped, they show the level at the playhead.'],
       ['Tracks', 'Each track header can hide, mute, solo, lock or remove its track and has a volume slider. + Video and + Audio add tracks (up to 10 and 8).'],
       ['Track headers', 'Double-click a track\'s name to rename it. The coloured stripe on the left picks its colour, which its clips take on. The arrow button switches the row between small, normal and large. Drag a header up or down to reorder tracks of the same kind; the bottom video track is always the main track.'],
       ['Solo (S)', 'Plays only the soloed tracks in the preview, so you can listen to one voice or the music alone. Solo more than one to hear them together. It never changes the export.'],
@@ -108,7 +110,9 @@ export const SECTIONS: HelpSection[] = [
       ['Media', 'Which file the clip plays, with Replace to swap it.'],
       ['Timing', 'Start, length, the source in-point, fade in and out, in seconds, and speed (presets from 0.25× to 4×, or type one).'],
       ['Transition in', 'Fade, dip to black or white, slide, whip, wipe or zoom from the clip before it.'],
-      ['Audio', 'Volume and Detach audio, which moves a video clip\'s sound to its own audio clip so you can trim and fade it separately.'],
+      ['Audio', 'Volume with its level in dB, Normalize (sets the gain so the clip\'s loudest moment reaches −1 dBFS, up to 200%), and Detach audio, which moves a video clip\'s sound to its own audio clip so you can trim and fade it separately.'],
+      ['Keyframes (◆)', 'Scale, position, rotation, opacity and volume can change over a clip. ◆ adds a keyframe at the playhead with the current value (or removes the one there); ‹ and › jump between keyframes. Once a property has keyframes, moving its slider sets a keyframe at the playhead. Then picks how the value moves on to the next keyframe: linear, ease in, ease out, ease in-out or hold. Clear removes them all. ; keys the property you used last.'],
+      ['Ducking', 'On an audio clip (or by right-clicking an audio track header): Duck under speech lowers the whole track wherever someone speaks on the other tracks, found from transcripts or from the waveform. It writes volume keyframes, so you can adjust them. Depth (−6 to −24 dB), attack and release set the dip; Remove ducking takes it out again.'],
       ['Effects', 'Auto colour, colour grades (warm, cool, teal-orange, mono, noir, vintage, faded, punchy), film grain, vignette, light leak, glitch, Ken Burns, zoom punch and blur. They stack in order.'],
       ['Text', 'Words, style preset, animation (fade, rise, pop, slam, typewriter), size and colour.'],
       ['Title style', 'Clean, Bold or Cinematic: the default look for every title and caption in the project.'],
@@ -210,6 +214,8 @@ export type TipId =
   | 'transition'
   | 'audio'
   | 'effects'
+  | 'keyframes'
+  | 'ducking'
   | 'captions'
   | 'text'
   | 'comments'
@@ -235,12 +241,14 @@ export const TIPS: Record<TipId, { text: string; section: string }> = {
   'inspector-clip': { text: 'Everything about the selected clip: framing, timing, transition, sound and effects.', section: 'inspector' },
   'inspector-timeline': { text: 'Nothing is selected, so this shows the timeline. Select a clip to edit it.', section: 'inspector' },
   'title-style': { text: 'The default look for every title and caption in this project.', section: 'inspector' },
-  transform: { text: 'Size, position, rotation and opacity. On a vertical short, Position chooses which part of a wide shot shows.', section: 'inspector' },
+  transform: { text: 'Size, position, rotation and opacity. On a vertical short, Position chooses which part of a wide shot shows. ◆ animates a value with keyframes.', section: 'inspector' },
   replace: { text: 'Swap the clip\'s media, keeping its place and length. You can also drop new media on the middle of a clip.', section: 'drops' },
   timing: { text: 'Where the clip sits, how long it runs, where in the source it starts, and its fades.', section: 'inspector' },
   transition: { text: 'How this clip enters from the one before it on the same track.', section: 'inspector' },
-  audio: { text: 'Volume. Detach audio moves a video\'s sound to its own clip.', section: 'inspector' },
+  audio: { text: 'Volume (with keyframes), Normalize to −1 dBFS, and Detach audio, which moves a video\'s sound to its own clip.', section: 'inspector' },
   effects: { text: 'Colour, grain, light and motion effects, applied top to bottom. Same in preview and export.', section: 'inspector' },
+  keyframes: { text: '◆ keys a value at the playhead; with keys, the slider sets one there. ‹ › jump between them, Then shapes the move to the next.', section: 'inspector' },
+  ducking: { text: 'Lowers this audio track wherever someone speaks on the other tracks, as editable volume keyframes.', section: 'inspector' },
   captions: { text: 'Words come from the transcript and light up as they are spoken. Edit the look here.', section: 'captions' },
   text: { text: 'The words on screen, their style preset, animation and colour.', section: 'inspector' },
   comments: { text: 'Notes pinned to a moment. Click a timecode to jump there.', section: 'comments' },
@@ -287,6 +295,9 @@ export const SHORTCUTS: [string, string][] = [
   [', . · ⌥← ⌥→', 'Nudge selected clips a frame (⇧ = 1 s)'],
   ['⇧E', 'Turn selected clips off · on'],
   ['Drag an audio clip\'s line', 'Volume (⇧ fine, double-click for 100%)'],
+  [';', 'Add or remove a keyframe at the playhead (the property used last in the inspector; opacity or volume at first)'],
+  ['Drag a keyframe diamond · ⌥-click it', 'Move it in time · delete it'],
+  ['Right-click an audio track header', 'Duck the track under speech'],
   ['S in a track header', 'Solo: hear only that track in the preview'],
   ['Double-click a track name', 'Rename it; drag the header to reorder'],
   ['Right-click', 'Clip menu · paste, markers, in/out'],

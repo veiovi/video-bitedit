@@ -12,6 +12,9 @@ import {
   type TransitionType,
   FORMATS,
   type FormatId,
+  type KeyframeEase,
+  type KeyframeProp,
+  type Keyframes,
   type ProjectDoc,
   SPEED_LIMITS,
   TRACK_LIMITS,
@@ -22,6 +25,7 @@ import {
   newId,
 } from '../shared/project';
 import { captionStyle, defaultTextStyle } from '../shared/themes';
+import { KEYFRAME_EASES, PROP_LIMITS, animatableProps, normalizeKeys, tidyKeyframes } from '../shared/keyframes';
 import type { LocalAsset } from './local-project';
 
 export interface CutListClip {
@@ -69,6 +73,59 @@ export interface CutListClip {
   transition?: { type: TransitionType; duration?: number };
   /** Snap `in`/`out` to the quietest moment nearby (overrides the timeline and file setting). */
   snap?: boolean;
+  /**
+   * Animation: per property (opacity, scale, offsetX, offsetY, rotation,
+   * volume), keys at `at` seconds from the clip's start. A property with keys
+   * ignores its static value. `ease` shapes the move to the next key: linear
+   * (default), easeIn, easeOut, easeInOut or hold.
+   */
+  keyframes?: Partial<Record<KeyframeProp, CutListKeyframe[]>>;
+}
+
+export interface CutListKeyframe {
+  /** Seconds from the clip's start (timeline time, so speed does not stretch it). */
+  at: number;
+  value: number;
+  ease?: KeyframeEase;
+}
+
+/**
+ * Cut-list keyframes in frames, checked: properties the clip can animate,
+ * keys inside the clip, values in range and known eases. Throws a message
+ * naming the clip on the first problem.
+ */
+export function cutListKeyframes(
+  spec: Partial<Record<string, CutListKeyframe[]>>,
+  clip: Pick<Clip, 'kind' | 'freeze' | 'duration'>,
+  fps: number,
+  where: string,
+): Keyframes | undefined {
+  if (typeof spec !== 'object' || spec === null || Array.isArray(spec)) throw new Error(`${where}: "keyframes" must be an object of property → keys`);
+  const allowed = animatableProps(clip);
+  const eases = KEYFRAME_EASES.map((e) => e.id as string);
+  const out: Keyframes = {};
+  for (const [prop, keys] of Object.entries(spec)) {
+    if (!(allowed as string[]).includes(prop)) {
+      throw new Error(`${where}: a ${clip.kind} clip cannot animate "${prop}"${allowed.length ? ` (use ${allowed.join(', ')})` : ''}`);
+    }
+    if (!Array.isArray(keys)) throw new Error(`${where}: keyframes.${prop} must be a list of { at, value }`);
+    const p = prop as KeyframeProp;
+    const { min, max } = PROP_LIMITS[p];
+    out[p] = normalizeKeys(
+      keys.map((k, i) => {
+        const at = Number(k?.at);
+        const value = Number(k?.value);
+        const frame = Math.round(at * fps);
+        if (!Number.isFinite(at) || at < 0 || frame >= clip.duration) {
+          throw new Error(`${where}: keyframes.${prop}[${i}].at must be seconds inside the clip (0 to ${((clip.duration - 1) / fps).toFixed(2)})`);
+        }
+        if (!Number.isFinite(value) || value < min || value > max) throw new Error(`${where}: keyframes.${prop}[${i}].value must be between ${min} and ${max}`);
+        if (k.ease !== undefined && !eases.includes(k.ease)) throw new Error(`${where}: keyframes.${prop}[${i}].ease must be one of ${eases.join(', ')}`);
+        return { frame, value, ...(k.ease && k.ease !== 'linear' && { ease: k.ease }) };
+      }),
+    );
+  }
+  return tidyKeyframes(out);
 }
 
 /** Captions generated from the transcripts of the clips a timeline uses. */
@@ -318,6 +375,7 @@ function buildTimeline(
           }
         : undefined,
     };
+    if (item.keyframes) clip.keyframes = cutListKeyframes(item.keyframes, clip, fps, where);
     const before = doc;
     doc = addClip(doc, clip);
     if (doc === before) throw new Error(`${where}: track ${track.name} cannot hold a ${kind} clip`);

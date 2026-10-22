@@ -23,6 +23,8 @@ import {
   zoomToFit,
 } from '../store';
 import { openHelp } from './Help';
+import { toggleKeyAtPlayhead } from '../keyframing';
+import { duckTrack, normalizeClips } from '../audio';
 import { appendToTimeline } from './MediaBin';
 
 const OPEN_EVENT = 'videdit:palette';
@@ -66,6 +68,14 @@ const RUN: Record<CommandId, () => void> = {
   deselect: () => state().select([]),
   'toggle-enabled': () => toggleEnabledSelection(),
   'detach-audio': () => detachSelection(),
+  keyframe: () => toggleKeyAtPlayhead(),
+  normalize: () => void normalizeClips(state().selection),
+  duck: () => {
+    const s = state();
+    const clip = activeTimeline(s).clips.find((c) => s.selection.includes(c.id) && c.kind === 'audio');
+    if (clip) void duckTrack(clip.trackId);
+    else s.setToast('Select an audio clip on the track to duck');
+  },
   'add-marker': () => {
     const s = state();
     s.applyTimeline((t) => ({ ...t, markers: [...t.markers, { id: newId(), frame: s.playhead, label: `Marker ${t.markers.length + 1}` }] }));
