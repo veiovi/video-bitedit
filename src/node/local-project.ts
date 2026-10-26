@@ -10,7 +10,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import type { Transcript } from '../shared/captions';
-import { type Asset, type Comment, type ProjectDoc, type RenderRecord, emptyDoc, newId, HISTORY, type HistoryEntry, summariseDoc, usedAssetIds } from '../shared/project';
+import { type Asset, type Comment, type ProjectDoc, type RenderRecord, emptyDoc, newId, HISTORY, type HistoryEntry, renderActive, summariseDoc, usedAssetIds } from '../shared/project';
 import { computePeaks, makeFilmstrip, makeThumbnail, mediaKind, mimeFor, probeMedia } from './media';
 
 export const PROJECT_FILE = 'videdit.json';
@@ -403,6 +403,23 @@ export class LocalProject {
     Object.assign(r, patch, { updatedAt: Date.now() });
     this.renders = list;
     return r;
+  }
+
+  /**
+   * Renders run inside the editor that queued them, so one this folder still lists as on its way
+   * was cut off when that editor closed. Marks those stopped, or they would keep Render & publish
+   * switched off. The editor calls it when it opens the folder.
+   */
+  endInterruptedRenders() {
+    for (const r of this.renders) {
+      if (!renderActive(r)) continue;
+      this.updateRender(
+        r.id,
+        r.status === 'uploading' && r.outputPath
+          ? { status: 'done', phase: null, error: 'Publishing stopped when the editor closed. Publish it again.' }
+          : { status: 'failed', phase: null, error: 'Stopped when the editor closed. Render it again.' },
+      );
+    }
   }
 
   get remote(): RemoteLink | null {

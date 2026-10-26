@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { type FrameRange, RENDER_PRESETS, type RenderPresetId, type RenderRecord, type Timeline, formatTimecode, timelineDuration } from '../../shared/project';
+import { type FrameRange, RENDER_PRESETS, type RenderPresetId, type RenderRecord, type Timeline, formatTimecode, renderActive, timelineDuration } from '../../shared/project';
 import { api, renderUrl } from '../api';
 import { activeTimeline, formatSeconds, markedRange, useEditor } from '../store';
 import { CopyLine, WorkspaceCard, useWorkspace } from './KeyBox';
@@ -60,7 +60,7 @@ export function ExportPanel() {
   const rangeLost = choice !== 'all' && !range;
 
   const load = () => api.listRenders(projectId).then(setRenders).catch(() => undefined);
-  const active = renders.some((r) => r.status === 'queued' || r.status === 'rendering' || r.status === 'uploading');
+  const active = renders.some(renderActive);
   useEffect(() => {
     void load();
     const t = setInterval(load, active ? 2000 : 10000);
@@ -149,15 +149,23 @@ export function ExportPanel() {
             <button disabled={busy || empty} onClick={() => start(false)}>
               Render
             </button>
+            {/* Off while a render is on its way, so a second click can't publish the same video twice. */}
             <button
               className="primary"
-              disabled={busy || empty || (local && !server?.cloudConfigured)}
+              disabled={busy || empty || active || (local && !server?.cloudConfigured)}
               onClick={() => start(true)}
-              title={local && !server?.cloudConfigured ? 'Run `videdit deploy` to enable publishing' : 'Render and publish a public watch page'}
+              title={
+                local && !server?.cloudConfigured
+                  ? 'Run `videdit deploy` to enable publishing'
+                  : active
+                    ? 'Available again when the current render finishes'
+                    : 'Render and publish a public watch page'
+              }
             >
               Render &amp; publish
             </button>
           </div>
+          {active && <p className="hint">A render is on its way below. Render &amp; publish comes back when it finishes.</p>}
           <div className="button-row still-row">
             <button className="small" disabled={busy || empty} onClick={exportStill} title="Render the frame under the playhead as a PNG">
               Export still (PNG) at {formatTimecode(playhead, timeline.fps)}
@@ -215,13 +223,18 @@ export function ExportPanel() {
                 </a>
               )}
               <div className="render-status">
-                {STATUS[r.status]}
-                {(r.status === 'rendering' || r.status === 'uploading') && ` ${Math.round(r.progress * 100)}%`}
-                {r.autoPublish && !r.publishedAt && r.status !== 'failed' && ' · will publish'}
+                {/* A phase (the renderer download, publishing) stands in for the frame progress. */}
+                {r.phase ? r.phase.label : STATUS[r.status]}
+                {r.phase
+                  ? r.phase.progress === null
+                    ? '…'
+                    : ` ${Math.round(r.phase.progress * 100)}%`
+                  : (r.status === 'rendering' || r.status === 'uploading') && ` ${Math.round(r.progress * 100)}%`}
+                {r.autoPublish && !r.publishedAt && r.status !== 'failed' && r.status !== 'uploading' && ' · will publish'}
               </div>
-              {(r.status === 'rendering' || r.status === 'uploading') && (
+              {(r.status === 'rendering' || r.status === 'uploading') && r.phase?.progress !== null && (
                 <div className="bar">
-                  <div style={{ width: `${Math.round(r.progress * 100)}%` }} />
+                  <div style={{ width: `${Math.round((r.phase?.progress ?? r.progress) * 100)}%` }} />
                 </div>
               )}
               {r.error && <div className="error">{r.error}</div>}
@@ -256,12 +269,17 @@ export function ExportPanel() {
                     Publish
                   </button>
                 )}
-                {canEdit && !local && r.publishedAt && (
+                {canEdit && r.publishedAt && (local ? server?.cloudConfigured : true) && (
                   <button
                     className="small"
+                    title="Take the watch page down. The render stays here."
                     onClick={async () => {
-                      await api.unpublishRender(projectId, r.id);
-                      await load();
+                      try {
+                        await api.unpublishRender(projectId, r.id);
+                        await load();
+                      } catch (err) {
+                        useEditor.getState().setToast((err as Error).message);
+                      }
                     }}
                   >
                     Unpublish

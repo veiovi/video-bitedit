@@ -279,6 +279,14 @@ the timeline on both servers and treats a range covering everything as the
 whole timeline. The `still-png` preset renders the frame at `range.start`
 with `renderStill`. Stills render locally or on a cloud render worker like
 any other job, and cannot be published.
+In the local editor, a render reports what it does before its first frame as
+its `phase`: Remotion's one-time download of Chrome Headless Shell (about
+170 MB, kept in the `node_modules/.remotion` nearest the folder the editor
+started from) with its percentage, unpacking, and preparing, then the upload
+while it publishes. Render & publish stays off while a render is on its way,
+so a second click can't publish the same video twice. Renders run inside the
+editor, so when an editor opens a folder, any render it still lists as on its
+way was cut off and is marked stopped (`endInterruptedRenders`).
 Caption clips are drawn by `chunkCaptions`. It groups words into
 lines of up to `wordsPerLine` (default four, one for the one-word look),
 balancing longer phrases (5 → 3 + 2). A line breaks after
@@ -334,6 +342,7 @@ one it is talking to. `GET /api/health` reports `mode: 'local' | 'cloud'`.
 | `GET/POST/PATCH/DELETE /api/p/:id/comments` | Timecoded comments. Anyone with the link may post |
 | `POST /api/p/:id/renders` | Queue a render `{ preset, timelineId, publish?, title?, description?, range? }`. `range` is `{ start, end }` in frames (end exclusive); a `still-png` render uses `range.start` |
 | `POST /api/p/:id/renders/:rid/publish` | Publish a finished render |
+| `DELETE /api/p/:id/renders/:rid/publish` | Take a render's watch page down; the render stays. The local server takes down the cloud render its watch URL names |
 | `GET /api/w/:rid`, `GET /w/:rid` | Public watch data, plus `versions`: the project's other published timelines for the watch page's switcher (`pickVersions`). The Worker adds `og:` tags to the HTML |
 | `POST /api/worker/claim`, `…/progress`, `…/upload`, `…/complete`, `…/fail` | Render worker protocol |
 | `POST /api/p/:id/push` | Local only: upload the folder to the configured cloud |
