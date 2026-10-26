@@ -155,6 +155,7 @@ async function main() {
   switch (command) {
     case 'open': {
       const project = await loadProject(positional[0]);
+      project.endInterruptedRenders();
       const server = await startLocalServer(project, { port: str('port') ? Number(str('port')) : undefined });
       const url = `${server.url}/p/${project.state.id}`;
       console.log(`Editing ${project.dir}\n  ${url}\nPress Ctrl+C to stop.`);

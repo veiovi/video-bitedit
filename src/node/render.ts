@@ -2,14 +2,14 @@
 // the same composition the browser preview plays.
 
 import { bundle } from '@remotion/bundler';
-import { renderMedia, renderStill, selectComposition } from '@remotion/renderer';
+import { type OnBrowserDownload, ensureBrowser, renderMedia, renderStill, selectComposition } from '@remotion/renderer';
 import { execFile } from 'node:child_process';
 import { rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { toolPath } from './media';
-import { type FrameRange, RENDER_PRESETS, type ProjectDoc, type RenderPresetId, findTimeline } from '../shared/project';
+import { type FrameRange, RENDER_PRESETS, type ProjectDoc, type RenderPhase, type RenderPresetId, findTimeline } from '../shared/project';
 
 const run = promisify(execFile);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -34,18 +34,53 @@ export interface RenderOptions {
   preset: RenderPresetId;
   output: string;
   onProgress?: (progress: number) => void;
+  /**
+   * The steps before the first frame: the one-time renderer download, then preparing; null once
+   * frames render. Without it, Remotion prints the download's progress to the terminal itself.
+   */
+  onPhase?: (phase: RenderPhase | null) => void;
   /** Normalise loudness to -14 LUFS (social-platform level) after rendering. Default true. */
   normalize?: boolean;
   /** Frames [start, end) to render; the whole timeline when unset. A still renders the frame at `start`. */
   range?: FrameRange | null;
 }
 
-export async function renderTimeline({ doc, timelineId, sources, preset, output, onProgress, normalize = true, range }: RenderOptions): Promise<void> {
+/**
+ * Remotion's `onBrowserDownload` hook, reporting the first render's download of Chrome Headless
+ * Shell as a phase. The download reports every chunk, so only whole-percent changes go through.
+ */
+export function browserDownloadPhase(onPhase: (phase: RenderPhase) => void): OnBrowserDownload {
+  return () => {
+    let last = -1;
+    return {
+      version: null,
+      onProgress: ({ alreadyAvailable, percent, totalSizeInBytes }) => {
+        const whole = Math.floor(percent * 100);
+        if (alreadyAvailable || whole === last) return;
+        last = whole;
+        onPhase(
+          percent >= 1
+            ? { label: 'Unpacking the renderer', progress: null }
+            : { label: `Downloading the renderer (once, ${Math.round(totalSizeInBytes / 1_048_576)} MB)`, progress: percent },
+        );
+      },
+    };
+  };
+}
+
+export async function renderTimeline({ doc, timelineId, sources, preset, output, onProgress, onPhase, normalize = true, range }: RenderOptions): Promise<void> {
   const timeline = findTimeline(doc, timelineId);
   if (!timeline) throw new Error(`No timeline "${timelineId}"`);
+  if (onPhase) {
+    onPhase({ label: 'Preparing', progress: null });
+    // Fetch the browser now rather than inside selectComposition, so the download can report progress.
+    await ensureBrowser({ onBrowserDownload: browserDownloadPhase(onPhase) });
+    onPhase({ label: 'Preparing', progress: null });
+  }
   const url = await serveUrl();
   const inputProps = { timeline, theme: doc.theme, sources };
   const composition = await selectComposition({ serveUrl: url, id: 'Timeline', inputProps });
+  onPhase?.(null);
   const p = RENDER_PRESETS[preset];
   if (p.still) {
     const frame = Math.min(Math.max(0, range?.start ?? 0), composition.durationInFrames - 1);

@@ -84,6 +84,7 @@ the logo to switch.
 
 **Render & publish** gives each timeline a public page with link previews.
 Publish the full cut and the short, and viewers can switch between them.
+**Unpublish** takes a page down again.
 The film above was cut from six phone clips by an agent using the workflow
 below.
 

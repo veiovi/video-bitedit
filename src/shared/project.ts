@@ -376,8 +376,29 @@ export interface RenderRecord {
   publishDescription: string | null;
   /** The part of the timeline rendered; null or unset for the whole timeline. A still renders the frame at `range.start`. */
   range?: FrameRange | null;
+  /** What a local render is doing besides drawing frames (the one-time renderer download, the upload), shown in place of its progress. */
+  phase?: RenderPhase | null;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface RenderPhase {
+  label: string;
+  /** 0–1, or null when there is nothing to measure. */
+  progress: number | null;
+}
+
+/** A render still on its way: waiting for a render worker, rendering or uploading. */
+export const renderActive = (r: Pick<RenderRecord, 'status'>) => r.status === 'queued' || r.status === 'rendering' || r.status === 'uploading';
+
+/** The cloud render ID a watch page URL ends in (`…/w/<id>`), or null. */
+export function watchRenderId(watchUrl: string | null | undefined): string | null {
+  if (!watchUrl) return null;
+  try {
+    return new URL(watchUrl).pathname.match(/^\/w\/([A-Za-z0-9_-]+)\/?$/)?.[1] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** Public data for a published render's watch page. */

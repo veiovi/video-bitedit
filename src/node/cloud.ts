@@ -261,6 +261,20 @@ export async function publishRender(
   return `${config.serverUrl}/w/${render.id}`;
 }
 
+/**
+ * Take down the watch page of a render published from this folder. The cloud keeps the render
+ * and its file; a render the cloud no longer has counts as already taken down.
+ */
+export async function unpublishRender(project: LocalProject, config: CloudConfig, renderId: string): Promise<void> {
+  const link = project.remote;
+  if (!link) throw new Error('This folder has no cloud copy, so it has nothing published.');
+  try {
+    await call(config, 'DELETE', `/api/p/${link.projectId}/renders/${renderId}/publish`, { editKey: link.editKey });
+  } catch (err) {
+    if (!(err instanceof CloudError && err.status === 404)) throw err;
+  }
+}
+
 /** Claim and render queued cloud jobs until stopped (or once, with `once`). */
 export async function runWorker(config: CloudConfig, opts: { once?: boolean; pollMs?: number; log?: (msg: string) => void } = {}) {
   const log = opts.log ?? console.log;

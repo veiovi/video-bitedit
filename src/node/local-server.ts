@@ -10,8 +10,20 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { isTranscript } from '../shared/captions';
-import { type Comment, type ProjectDoc, RENDER_PRESETS, type RenderPresetId, type ServerInfo, findTimeline, newId, renderExt, renderRange, timelineDuration } from '../shared/project';
-import { publishRender, pushProject, viewUrl, editUrl } from './cloud';
+import {
+  type Comment,
+  type ProjectDoc,
+  RENDER_PRESETS,
+  type RenderPresetId,
+  type ServerInfo,
+  findTimeline,
+  newId,
+  renderExt,
+  renderRange,
+  timelineDuration,
+  watchRenderId,
+} from '../shared/project';
+import { publishRender, pushProject, unpublishRender, viewUrl, editUrl } from './cloud';
 import { loadConfig } from './config';
 import { generateIntoProject, openRouterKey } from './imagegen';
 import { type LocalAsset, type LocalRender, LocalProject } from './local-project';
@@ -133,11 +145,12 @@ export async function startLocalServer(project: LocalProject, opts: { port?: num
           output,
           range: render.range,
           onProgress: (progress) => project.updateRender(render.id, { progress }),
+          onPhase: (phase) => project.updateRender(render.id, { phase }),
         });
-        project.updateRender(render.id, { status: 'done', progress: 1, outputPath: output, outputSize: statSync(output).size });
+        project.updateRender(render.id, { status: 'done', progress: 1, phase: null, outputPath: output, outputSize: statSync(output).size });
         if (render.autoPublish) await publishLocalRender(render.id);
       } catch (err) {
-        project.updateRender(render.id, { status: 'failed', error: (err as Error).message.slice(0, 4000) });
+        project.updateRender(render.id, { status: 'failed', phase: null, error: (err as Error).message.slice(0, 4000) });
       }
     });
   }
@@ -148,7 +161,8 @@ export async function startLocalServer(project: LocalProject, opts: { port?: num
     if (RENDER_PRESETS[render.preset].still) throw new HttpError(409, 'Stills cannot be published');
     const config = loadConfig();
     if (!config) throw new HttpError(409, 'No cloud configured. Run `videdit deploy` first.');
-    project.updateRender(renderId, { status: 'uploading' });
+    // The upload reports no progress, so the phase stands in for the render's finished bar.
+    project.updateRender(renderId, { status: 'uploading', phase: { label: 'Publishing', progress: null } });
     try {
       await pushProject(project, config, { force: false });
       const watchUrl = await publishRender(project, config, render.outputPath, render.preset, render.timelineId, {
@@ -156,9 +170,9 @@ export async function startLocalServer(project: LocalProject, opts: { port?: num
         description: render.publishDescription ?? '',
         range: render.range ?? null,
       });
-      project.updateRender(renderId, { status: 'done', watchUrl, publishedAt: Date.now() });
+      project.updateRender(renderId, { status: 'done', phase: null, watchUrl, publishedAt: Date.now() });
     } catch (err) {
-      project.updateRender(renderId, { status: 'done', error: `Publish failed: ${(err as Error).message}` });
+      project.updateRender(renderId, { status: 'done', phase: null, error: `Publish failed: ${(err as Error).message}` });
       throw err;
     }
   }
@@ -378,6 +392,19 @@ export async function startLocalServer(project: LocalProject, opts: { port?: num
       project.updateRender(p[2], { publishTitle: b.title ?? null, publishDescription: b.description ?? null });
       await publishLocalRender(p[2]);
       return send(res, 200, project.renders.find((r) => r.id === p![2]));
+    }
+    if ((p = m('/api/p/:id/renders/:rid/publish')) && method === 'DELETE') {
+      checkProject(p[1]);
+      const render = project.renders.find((r) => r.id === p![2]);
+      if (!render) throw new HttpError(404, 'Render not found');
+      // A local render's watch page is a render in the cloud copy, named by its URL.
+      const remoteId = watchRenderId(render.watchUrl);
+      if (remoteId) {
+        const config = loadConfig();
+        if (!config) throw new HttpError(409, 'No cloud configured. Run `videdit deploy` first.');
+        await unpublishRender(project, config, remoteId);
+      }
+      return send(res, 200, project.updateRender(render.id, { publishedAt: null, watchUrl: null }));
     }
     if ((p = m('/api/p/:id/renders/:rid')) && method === 'DELETE') {
       checkProject(p[1]);
