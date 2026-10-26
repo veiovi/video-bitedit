@@ -47,6 +47,29 @@ import { HelpButton, HelpTip } from './Help';
 
 type MobilePanel = 'media' | 'inspector' | 'transcript' | 'comments' | 'history' | 'export';
 
+/**
+ * Coding Agent Optimized View, narrow panes: the panel dock under the timeline
+ * folds away. Keep in sync with the matching block in styles.css.
+ */
+const FOLDING_DOCK = '(min-width: 481px) and (max-width: 699px) and (min-height: 600px)';
+const DOCK_KEY = 'videdit.dock';
+
+function readDockOpen(): boolean {
+  try {
+    return localStorage.getItem(DOCK_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+function writeDockOpen(open: boolean) {
+  try {
+    localStorage.setItem(DOCK_KEY, open ? '1' : '0');
+  } catch {
+    // Private mode or blocked storage: the dock state lasts for this tab only.
+  }
+}
+
 function SkinPicker() {
   const [skin, setSkin] = useState(currentSkin);
   const [open, setOpen] = useState(false);
@@ -481,6 +504,7 @@ export function EditorPage({ projectId }: { projectId: string }) {
   const [error, setError] = useState('');
   const [sharing, setSharing] = useState(false);
   const [mobile, setMobile] = useState<MobilePanel>('media');
+  const [dockOpen, setDockOpen] = useState(readDockOpen);
   const [comments, setComments] = useState<Comment[]>([]);
 
   const loadComments = useCallback(() => {
@@ -539,14 +563,28 @@ export function EditorPage({ projectId }: { projectId: string }) {
   }
   if (!doc) return <div className="center-page">Loading…</div>;
 
+  const showDock = (open: boolean) => {
+    setDockOpen(open);
+    writeDockOpen(open);
+  };
   const openPanel = (p: EditorPanel) => {
     useEditor.setState({ panel: p });
     setMobile(p);
+    showDock(true);
+  };
+  // In a narrow agent pane the active tab folds the panel away to give the
+  // timeline the room; elsewhere the tabs only switch.
+  const pickTab = (p: MobilePanel) => {
+    if (p === mobile && window.matchMedia(FOLDING_DOCK).matches) return showDock(!dockOpen);
+    if (p === 'media') {
+      setMobile('media');
+      showDock(true);
+    } else openPanel(p);
   };
   const timelineComments = comments.filter((c) => !c.resolved);
 
   return (
-    <div className={`app m-${mobile}`}>
+    <div className={`app m-${mobile}${dockOpen ? '' : ' dock-closed'}`}>
       <header className="topbar">
         <SkinPicker />
         <div className="title-wrap">
@@ -617,7 +655,8 @@ export function EditorPage({ projectId }: { projectId: string }) {
           <button
             key={p}
             className={mobile === p ? 'on' : ''}
-            onClick={() => (p === 'media' ? setMobile('media') : openPanel(p))}
+            aria-expanded={mobile === p ? dockOpen : undefined}
+            onClick={() => pickTab(p)}
           >
             {p === 'media' ? 'Media' : p === 'inspector' ? 'Edit' : p === 'transcript' ? 'Text' : p === 'comments' ? 'Notes' : p === 'history' ? 'History' : 'Export'}
           </button>

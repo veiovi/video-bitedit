@@ -3964,3 +3964,133 @@ button.help-more:hover:not(:disabled) {
     display: none;
   }
 }
+
+/* ---------- Coding Agent Optimized View ----------
+ * A browser pane beside a coding agent: wider than a phone and tall. The whole
+ * editor fits the pane without page scrolling, with a short preview, the
+ * timeline taking the free height, and the panels in a tabbed dock. */
+
+@media (min-width: 481px) and (max-width: 860px) and (min-height: 600px) {
+  .app {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+    grid-template-rows: auto auto minmax(150px, 1fr) auto min(28dvh, 300px);
+    grid-template-areas:
+      'top'
+      'preview'
+      'tl'
+      'tabs'
+      'panel';
+    padding: 6px;
+  }
+
+  .bin,
+  .side {
+    min-height: 0;
+  }
+
+  .topbar {
+    flex-wrap: nowrap;
+  }
+
+  .title-wrap {
+    order: 0;
+    flex: 1 1 auto;
+    flex-basis: auto;
+    min-width: 0;
+  }
+
+  .preview-panel {
+    min-height: min-content;
+  }
+
+  .player-wrap {
+    height: clamp(140px, 21dvh, 56vw);
+  }
+
+  .preview-panel .panel-head {
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+
+  .transport {
+    padding: 4px 8px;
+  }
+
+  .timeline {
+    height: auto;
+    min-height: 0;
+  }
+
+  /* One row of tools that scrolls sideways, so the tracks keep the height. */
+  .timeline-toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  .timeline-toolbar > * {
+    flex-shrink: 0;
+  }
+
+  .mobile-tabs {
+    position: static;
+    grid-area: tabs;
+    padding: 0;
+    gap: 4px;
+    background: none;
+    border-top: 0;
+  }
+
+  .mobile-tabs button {
+    min-height: 30px;
+    padding: 2px;
+    font-size: 12px;
+  }
+
+  .toast {
+    bottom: 16px;
+  }
+}
+
+/* Narrow panes stack the panel under the timeline; the active tab folds it away.
+ * Keep the query in sync with FOLDING_DOCK in EditorPage.tsx. */
+@media (min-width: 481px) and (max-width: 699px) and (min-height: 600px) {
+  .app.dock-closed {
+    grid-template-rows: auto auto minmax(150px, 1fr) auto;
+  }
+
+  .app.dock-closed .bin,
+  .app.dock-closed .side {
+    display: none;
+  }
+}
+
+/* Wider panes: the panel sits beside the preview and stays open. */
+@media (min-width: 700px) and (max-width: 860px) and (min-height: 600px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr) minmax(250px, 42%);
+    grid-template-rows: auto auto clamp(230px, 34dvh, 400px) minmax(150px, 1fr);
+    grid-template-areas:
+      'top top'
+      'preview tabs'
+      'preview panel'
+      'tl tl';
+  }
+
+  .player-wrap {
+    flex: 1;
+    height: auto;
+  }
+
+  .mobile-tabs {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (min-width: 481px) and (max-width: 860px) and (min-height: 600px) and (pointer: coarse) {
+  .mobile-tabs button {
+    min-height: 40px;
+  }
+}
