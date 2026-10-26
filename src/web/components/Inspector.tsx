@@ -536,7 +536,9 @@ function ClipInspector({ clip, timeline }: { clip: Clip; timeline: Timeline }) {
             ? clip.text?.text.slice(0, 24) || 'Text'
             : clip.kind === 'caption'
               ? 'Captions'
-              : (asset?.name ?? 'Missing media')}
+              : clip.kind === 'slide'
+                ? `Slide · ${clip.slide?.title.split('\n')[0] ?? ''}`
+                : (asset?.name ?? 'Missing media')}
         </span>
         <HelpTip id="inspector-clip" />
       </div>

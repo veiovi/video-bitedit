@@ -44,8 +44,11 @@ preview exactly.
      - Muse Image stills;
      - one narration file per scene on A1, with each scene timed to its audio.
 4. **Review.** Run `videdit open <folder>` and give the person the URL. If
-   they ask for changes, edit `plan.json` (or `videdit.json`) and run the cut
-   again. The open editor reloads automatically.
+   your environment has a browser pane beside the chat, open the URL there.
+   The editor's Coding Agent Optimized View fits panes 481–860 px wide, so
+   the person sees the preview and the timeline while you work. If they ask
+   for changes, edit `plan.json` (or `videdit.json`) and run the cut again.
+   The open editor reloads automatically.
 5. **Deliver.**
    - Local file: `videdit render <folder> --timeline <name>`. Output goes to
      `<folder>/exports/`. `--from <time> --to <time>` renders only part, and

@@ -57,6 +57,18 @@ split or move the clips and the words stay in sync.
 The whole editor is responsive. Scrub, trim, split and restyle captions on a
 phone, with the media bin, inspector, comments and export one tab away.
 
+### Coding Agent Optimized View
+
+<img src="docs/screenshots/agent-view.jpg" alt="The editor in two browser panes beside a coding agent: at 600 px the preview, timeline and media bin stack in one screen; at 780 px the edit panel sits beside the preview above the full-width timeline" width="100%">
+
+Most people review an agent's cut in a browser pane next to the coding agent,
+which is a little wider than a phone. In panes 481–860 px wide and at least
+600 px tall, the editor fits on one screen with no page scrolling. The header
+is one line, the preview is compact, the timeline tools sit in one row, and
+the timeline takes the free height. From 700 px the panels sit beside the
+preview. In narrower panes they dock under the timeline, and clicking the
+open tab folds the dock away to give the tracks more room.
+
 ### Five skins, one editor
 
 <img src="docs/screenshots/skins.jpg" alt="The same project in the Mono Unix, Nightshift, Amp Cut and Sand Edit skins" width="100%">

@@ -210,7 +210,10 @@ To use AI images, set `OPENROUTER_API_KEY`, or run `videdit config openrouter-ke
 videdit open <folder>
 ```
 
-This opens the editor at `http://127.0.0.1:4848`. Agents may also edit
+This opens the editor at `http://127.0.0.1:4848`. If you have a browser pane
+beside the chat, open it there: in panes 481–860 px wide and at least 600 px
+tall, the editor switches to the Coding Agent Optimized View, which keeps the
+preview and the timeline on one screen. Agents may also edit
 `videdit.json` directly while the editor is open. The server notices the
 change, bumps the version, and the editor reloads within a few seconds. The
 file format is `{ videdit: 1, id, version, doc, assets }`, where `doc` is
